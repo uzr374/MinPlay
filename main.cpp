@@ -1,11 +1,15 @@
 #include "mainwindow.hpp"
 
+#include <SDL3/SDL.h>
+
 #include <QApplication>
 #include <QLocale>
 #include <QTranslator>
 
 int main(int argc, char *argv[])
 {
+    const bool sdl_initialized = SDL_Init(0);
+    if(!sdl_initialized) return -1;
     QApplication a(argc, argv);
 
     QTranslator translator;
@@ -19,5 +23,8 @@ int main(int argc, char *argv[])
     }
     MainWindow w;
     w.show();
-    return a.exec();
+    const auto ret = a.exec();
+    SDL_Quit();
+
+    return ret;
 }

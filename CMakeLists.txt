@@ -22,8 +22,8 @@ set(PROJECT_SOURCES
         main.cpp
         mainwindow.cpp
         mainwindow.hpp
-        player.cpp
-        src/player.hpp
+
+
         src/GUI/CDockWidget.hpp
         src/GUI/CDockWidget.cpp
         src/GUI/VideoDock.hpp
@@ -49,6 +49,22 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_executable(MinPlay
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
+        playback/cavframe.h playback/cavframe.cpp
+        playback/cavchannellayout.hpp playback/cavchannellayout.cpp
+        playback/csubtitle.hpp playback/csubtitle.cpp
+        playback/sdlrenderer.hpp playback/sdlrenderer.cpp
+
+        src/GUI/videodisplaywidget.hpp src/GUI/videodisplaywidget.cpp
+        playback/playercore.hpp playback/playercore.cpp
+        playback/decoder.hpp playback/decoder.cpp
+        playback/videodec.hpp playback/videodec.cpp
+        playback/cavstream.hpp playback/cavstream.cpp
+        playback/sdlkeymap.cpp
+        playback/sdlkeymap.hpp
+        src/GUI/StatusBar.hpp src/GUI/StatusBar.cpp
+        src/GUI/Slider.hpp src/GUI/Slider.cpp
+
+
     )
 # Define target properties for Android with Qt 6 as:
 #    set_property(TARGET MinPlay APPEND PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR

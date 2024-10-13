@@ -5,23 +5,26 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
-struct CAVPacket {
+class CAVPacket final {
     AVPacket *pkt = nullptr;
-    int pkt_serial = -1;
+    bool is_flush = false;
 
+    static void copy_props(const CAVPacket& src, CAVPacket& dst);
+
+public:
     CAVPacket();
     ~CAVPacket();
 
     AVPacket* av();
     const AVPacket* constAv() const;
-    void reset();
-    int serial() const;
-
-    static void copy_props(const CAVPacket& src, CAVPacket& dst);
+    void unref();
+    void setFlush(bool flush);
+    bool isEmpty() const;
+    bool isFlush() const;
 
     CAVPacket(const CAVPacket& src);
     CAVPacket(CAVPacket&& src);
-    CAVPacket(AVPacket* src, int serial);
+
     CAVPacket& operator=(const CAVPacket& src);
     CAVPacket& operator=(CAVPacket&& src);
 };

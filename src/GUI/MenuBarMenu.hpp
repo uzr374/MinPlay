@@ -16,9 +16,11 @@ public:
     QVector<QMenu*> getTopLevelMenus() const;
 
     Q_SLOT void openURL();
-    Q_SLOT void stopPlayback();
-    Q_SLOT void pausePlayback();
-    Q_SLOT void resumePlayback();
+
+signals:
+    void stopPlayback();
+    void pausePlayback();
+    void resumePlayback();
 };
 
 #endif // MENUBARMENU_H

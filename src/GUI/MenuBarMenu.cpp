@@ -1,8 +1,8 @@
 #include "MenuBarMenu.hpp"
 
-#include <QFileDialog>
+#include "../../playback/playercore.hpp"
 
-#include "../player.hpp"
+#include <QFileDialog>
 
 
 MenuBarMenu::MenuBarMenu(QWidget* parent) : QObject(parent){
@@ -23,9 +23,9 @@ MenuBarMenu::MenuBarMenu(QWidget* parent) : QObject(parent){
     auto stop_act = addPlaybMnuAct("Stop");
 
     connect(fopen_act, &QAction::triggered, this, &MenuBarMenu::openURL);
-    connect(stop_act, &QAction::triggered, this, &MenuBarMenu::stopPlayback);
     connect(pause_act, &QAction::triggered, this, &MenuBarMenu::pausePlayback);
     connect(resume_act, &QAction::triggered, this, &MenuBarMenu::resumePlayback);
+    connect(stop_act, &QAction::triggered, this, &MenuBarMenu::stopPlayback);
 }
 
 MenuBarMenu::~MenuBarMenu(){}
@@ -37,13 +37,6 @@ QVector<QMenu*> MenuBarMenu::getTopLevelMenus() const {
 void MenuBarMenu::openURL(){
     const auto path = QFileDialog::getOpenFileName(dynamic_cast<QWidget*>(this->parent()), "Choose a file to open");
     if(!path.isEmpty()){
-        open_url(path.toStdString());
+        playerCore.openURL(path);
     }
 }
-
-void MenuBarMenu::stopPlayback(){
-    stop_playback();
-}
-
-void MenuBarMenu::pausePlayback(){pause();}
-void MenuBarMenu::resumePlayback(){resume();}

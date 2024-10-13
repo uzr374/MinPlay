@@ -4,7 +4,7 @@
 #include <QWidget>
 #include <QTimer>
 
-class DisplayWidget : public QWidget{
+class DisplayWidget final : public QWidget{
     Q_OBJECT
 
 private:
@@ -17,6 +17,7 @@ private:
 
 public:
     explicit DisplayWidget(QWidget* parent);
+    ~DisplayWidget();
 };
 
 #endif // DISPLAYWIDGET_H

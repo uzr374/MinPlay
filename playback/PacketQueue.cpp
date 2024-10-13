@@ -1,95 +1,45 @@
 #include "PacketQueue.hpp"
 
-PacketQueue::PacketQueue(): abort_request(true){}
-
-int PacketQueue::put_private(AVPacket *pkt)
+bool PacketQueue::put(CAVPacket&& pkt)
 {
-    if (abort_request)
-        return -1;
+    auto lck = getLocker();
+    ++params.nb_packets;
+    params.size += pkt.constAv()->size + sizeof(AVPacket);
+    params.duration += pkt.constAv()->duration;
+    pkt_list.push(std::move(CAVPacket(pkt)));
 
-    ++nb_packets;
-    size += pkt->size + sizeof(AVPacket);
-    duration += pkt->duration;
-
-    pkt_list.push(CAVPacket(pkt, serial));
-
-    /* XXX: should duplicate packet data in DV case */
-    cond.notify_one();
-    return 0;
+    return true;
 }
 
-int PacketQueue::put(AVPacket *pkt)
-{
-    std::unique_lock lck(mutex);
-    const int ret = put_private(pkt);
-
-    return ret;
-}
-
-int PacketQueue::put_nullpacket(int stream_index)
+bool PacketQueue::put_nullpacket()
 {
     CAVPacket pkt;
-    pkt.av()->stream_index = stream_index;
-    return put(pkt.av());
+    pkt.setFlush(true);
+    auto lck = getLocker();
+    return put(std::move(pkt));
 }
 
+PktQParams PacketQueue::getParams() {
+    auto lck = getLocker();
+    return params;
+}
+
+/*One should acquire the lock by calling getLocker() before calling this function*/
 void PacketQueue::flush()
 {
-    std::unique_lock lck(mutex);
     pkt_list = std::queue<CAVPacket>();
-    nb_packets = 0;
-    size = 0;
-    duration = 0;
-    serial++;
+    params = PktQParams();
 }
 
-void PacketQueue::destroy()
+bool PacketQueue::get(CAVPacket& dst)
 {
-    flush();
-}
-
-void PacketQueue::abort()
-{
-    std::unique_lock lck(mutex);
-    abort_request = 1;
-    cond.notify_one();
-}
-
-void PacketQueue::start()
-{
-    std::unique_lock lck(mutex);
-    abort_request = 0;
-    serial++;
-}
-
-/* return < 0 if aborted, 0 if no packet and > 0 if packet.  */
-int PacketQueue::get(AVPacket *pkt, int block, int *serial)
-{
-    int ret;
-    std::unique_lock lck(mutex);
-    for (;;) {
-        if (abort_request) {
-            ret = -1;
-            break;
-        }
-
-        if (!pkt_list.empty()) {
-            auto pkt1 = pkt_list.front();
-            pkt_list.pop();
-            av_packet_move_ref(pkt, pkt1.pkt);
-            nb_packets--;
-            size -= pkt->size + sizeof(AVPacket);
-            duration -= pkt->duration;
-            if (serial)
-                *serial = pkt1.serial();
-            ret = 1;
-            break;
-        } else if (!block) {
-            ret = 0;
-            break;
-        } else {
-            cond.wait(lck);
-        }
+    if (!pkt_list.empty()) {
+        dst = std::move(pkt_list.front());
+        pkt_list.pop();
+        --params.nb_packets;
+        params.size -= dst.constAv()->size + sizeof(AVPacket);
+        params.duration -= dst.constAv()->duration;
+        return true;
     }
-    return ret;
+    return false;
 }

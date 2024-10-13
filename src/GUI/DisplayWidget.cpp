@@ -3,6 +3,7 @@
 #include <QEvent>
 #include <QCursor>
 #include <QPainter>
+#include <QHBoxLayout>
 
 DisplayWidget::DisplayWidget(QWidget* parent) : QWidget(parent), m_mouseTimer(this){
     m_mouseTimer.setSingleShot(true);
@@ -10,6 +11,10 @@ DisplayWidget::DisplayWidget(QWidget* parent) : QWidget(parent), m_mouseTimer(th
     m_mouseTimer.callOnTimeout([this]{setCursorVisibility(false);});
 
     setMouseTracking(true);//To receive mouse move events properly
+}
+
+DisplayWidget::~DisplayWidget(){
+
 }
 
 void DisplayWidget::setCursorVisibility(bool visible){

@@ -19,13 +19,11 @@ private:
     double clock_pts_drift = 0.0;     /* clock base minus time at which we updated the clock */
     double clock_last_updated = 0.0;
     double clock_speed = 1.0;
-    int clock_serial = -1;           /* clock is based on a packet with this serial */
     bool clock_paused = false;
-    int *queue_serial = nullptr;    /* pointer to the current packet queue serial, used for obsolete clock detection */
     mutable std::mutex mutex;
 
 private:
-    void set_at(double pts, int serial, double time);
+    void set_at(double pts, double time);
 
 public:
     Clock() = default;
@@ -34,9 +32,8 @@ public:
     Q_DISABLE_COPY_MOVE(Clock);
 
     double get() const;
-    void set(double pts, int serial, double time = gettime_s());
-    void init(int *queue_serial);
-    int serial() const;
+    void set(double pts, double time = gettime_s());
+    void init();
     double last_upd() const;
     bool is_paused() const;
     double pts() const;

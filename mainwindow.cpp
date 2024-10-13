@@ -2,12 +2,13 @@
 
 #include "src/GUI/MenuBar.hpp"
 #include "src/GUI/VideoDock.hpp"
+#include "src/GUI/videodisplaywidget.hpp"
+#include "src/GUI/ToolBar.hpp"
+#include "src/GUI/StatusBar.hpp"
 
 #include <QScreen>
 #include <QDebug>
 #include <QCloseEvent>
-
-#include "src/player.hpp"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -21,14 +22,29 @@ MainWindow::MainWindow(QWidget *parent)
     auto mBar = new MenuBar(this, m_menus->getTopLevelMenus());
     setMenuBar(mBar);
 
-    //
+    auto tBar = new ToolBar(this);
+    addToolBar(Qt::BottomToolBarArea, tBar);
+
+    auto sBar = new StatusBar(this);
+    setStatusBar(sBar);
+
     auto vDock = new VideoDock(this);
+    auto vWidget = static_cast<VideoDisplayWidget*>(vDock->widget());
     addDockWidget(Qt::LeftDockWidgetArea, vDock);
 
+    core = new PlayerCore(this, vWidget);
+
     setGeometry(getDefaultWindowGeometry(this->screen()));
+
+    connect(m_menus, &MenuBarMenu::stopPlayback, core, &PlayerCore::stopPlayback);
+    connect(m_menus, &MenuBarMenu::pausePlayback, core, &PlayerCore::pausePlayback);
+    connect(m_menus, &MenuBarMenu::resumePlayback, core, &PlayerCore::resumePlayback);
+    connect(tBar, &ToolBar::sigSeek, core, &PlayerCore::requestSeekPercent);
 }
 
-MainWindow::~MainWindow() {}
+MainWindow::~MainWindow() {
+    core->stopPlayback();
+}
 
 QRect MainWindow::getDefaultWindowGeometry(QScreen* container){
     const auto screen_size = container->size();
@@ -36,11 +52,10 @@ QRect MainWindow::getDefaultWindowGeometry(QScreen* container){
     constexpr auto window_fill = 0.4;
     const int window_w = screen_width * window_fill, window_h = screen_height * window_fill;
     const QPoint winpos((screen_width - window_w)/2, (screen_height - window_h)/2);
-    //qDebug() << "Winsize: [" << window_w << ", " << window_h <<"]";
     return QRect(winpos, QSize(window_w, window_h));
 }
 
 void MainWindow::closeEvent(QCloseEvent* evt){
-    stop_playback();        //TODO: fix the crash here
+    core->stopPlayback();
     QMainWindow::closeEvent(evt);
 }
