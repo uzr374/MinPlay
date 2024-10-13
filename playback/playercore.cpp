@@ -633,10 +633,7 @@ void video_render_thread(VideoState* ctx){
             if (!isnan(last_pts))
                 ctx->vidclk.set(last_pts, time);
 
-            if(force_frame){
-                last_duration = 0.0;
-                force_frame = false;
-            } else{
+            if(!force_frame){
                 last_duration = nom_last_duration;
                 frame_timer += delay;
                 if (delay > 0 && time - frame_timer > AV_SYNC_THRESHOLD_MAX)
@@ -652,8 +649,8 @@ void video_render_thread(VideoState* ctx){
                         continue;
                     }
                 }
-
             }
+            force_frame = false;
 
             renderer->pushFrame(std::move(decoded_frames.front()));//Asynchronous double-buffering
             decoded_frames.pop_front();
