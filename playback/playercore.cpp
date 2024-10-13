@@ -919,7 +919,7 @@ static int demux_thread(VideoState* is)
                         const uint64_t size =  avio_size(ic->pb);
                         set_seek(size*info.percent, 0, true);
                     } else {
-                        const int tns  = ic->duration / 1000000LL;
+                        const auto tns  = ic->duration / AV_TIME_BASE;
                         const int thh  = tns / 3600;
                         const int tmm  = (tns % 3600) / 60;
                         const int tss  = (tns % 60);
