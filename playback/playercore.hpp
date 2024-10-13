@@ -10,8 +10,6 @@
 #include <thread>
 #include <condition_variable>
 
-#include <QThread>
-
 struct SeekInfo {
     enum SeekType{
         SEEK_NONE, SEEK_PERCENT, SEEK_INCREMENT, SEEK_CHAPTER
@@ -19,6 +17,7 @@ struct SeekInfo {
 
     SeekType type = SEEK_NONE;
     double percent = 0.0, increment = 0.0;
+    int chapter_incr = 0;
 };
 
 
@@ -26,7 +25,7 @@ struct VideoState final {
     std::thread demux_thr;
     std::mutex demux_mutex;
     std::condition_variable continue_read_thread;
-    bool seek_req = false, pause_req = false;
+    bool seek_req = false, pause_req = false, athr_eos = false, vthr_eos = false;
     SeekInfo seek_info;
     int64_t last_seek_pos = 0, last_seek_rel = 0;
 
@@ -34,13 +33,11 @@ struct VideoState final {
     bool flush_athr = false, athr_quit = false, athr_pause_req = false;
     int64_t last_audio_pos = -1;
     double last_audio_pts = 0.0;
-    bool athr_eof = false;
 
     std::thread video_render_thr;
     bool flush_vthr = false, vthr_quit = false, vthr_pause_req = false;
     int64_t last_video_pos = -1;
     double last_video_pts = 0.0;
-    bool vthr_eof = false;
 
     Clock audclk, vidclk;
 

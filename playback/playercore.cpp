@@ -379,7 +379,7 @@ void audio_render_thread(VideoState* ctx){
     bool local_paused = false, last_paused = false;
     SwrContext *swr_ctx = nullptr;
     std::list<CAVFrame> decoded_frames;
-    bool eof = false, flush = false;
+    bool eos = false, eos_reported = false, flush = false;
     float last_volume = 1.0f;
     CAVPacket pkt;
     double last_pts = 0.0, last_duration = 0.0;
@@ -424,10 +424,11 @@ void audio_render_thread(VideoState* ctx){
             decoded_frames.clear();
             SDL_ClearAudioStream(astream);
             dec.flush();
+            eos = eos_reported = false;
             last_pts = last_duration = 0.0;
             last_byte_pos = -1;
             pkt.unref();
-            ctx->audclk.set(NAN);
+            ctx->audclk.set_eos(false, NAN);
             continue;
         }
 
@@ -438,10 +439,14 @@ void audio_render_thread(VideoState* ctx){
             wait_timeout();
         }
 
-        eof = dec.eofReached() && decoded_frames.empty() && get_buffered_duration(astream) < audiobuf_empty_duration;
+        eos = dec.eofReached() && decoded_frames.empty() && get_buffered_duration(astream) < audiobuf_empty_duration;
+        if(eos && !eos_reported){
+            ctx->audclk.set_eos(true, last_pts + last_duration);
+            std::scoped_lock dlck(ctx->demux_mutex);
+            ctx->athr_eos = eos_reported = true;
+        }
 
-        if(local_paused || eof){
-            //clk.set_paused(true);
+        if(local_paused || eos){
             wait_timeout();
             continue;
         }
@@ -517,7 +522,7 @@ static double compute_target_delay(double delay, VideoState *ctx, double max_dur
 
 static double vp_duration(const CAVFrame& vp, double last_pts, double last_duration, double max_duration) {
     const double duration = vp.ts() - last_pts;
-    if (isnan(duration) || duration <= 0.0 || duration > max_duration)
+    if (isnan(duration) || duration <= 0 || duration > max_duration)
         return last_duration;
     else
         return duration;
@@ -532,7 +537,7 @@ void video_render_thread(VideoState* ctx){
     bool local_paused = false, last_paused = false;
     SwsContext *sub_convert_ctx = nullptr;
     std::list<CAVFrame> decoded_frames;
-    bool eof = false, stream_eof = false, flush = false, update_frame_timer = false, force_frame = true;
+    bool eos = false, eos_reported = false, flush = false, update_frame_timer = false, force_frame = true;
     double frame_timer = 0.0, last_pts = 0.0, last_duration = 0.0;
     double remaining_time = 0.0, remaining_time_set_at = 0.0;
 
@@ -569,13 +574,12 @@ void video_render_thread(VideoState* ctx){
             decoded_frames.clear();
             dec.flush();
             update_frame_timer = force_frame = true;
-            eof = false;
+            eos = eos_reported = false;
             remaining_time = remaining_time_set_at = 0.0;
             last_pts = last_duration = 0.0;
             last_byte_pos = -1;
             pkt.unref();
-            ctx->vidclk.set(NAN);
-            qDebug() << "Video thread flush complete";
+            ctx->vidclk.set_eos(false, NAN);
             continue;
         }
 
@@ -586,14 +590,19 @@ void video_render_thread(VideoState* ctx){
             wait_timeout();
         }
 
-        eof = decoded_frames.empty() && dec.eofReached();
+        eos = decoded_frames.empty() && dec.eofReached();
+        if(eos && eos_reported){
+            ctx->vidclk.set_eos(true, last_pts);
+            std::scoped_lock dlck(ctx->demux_mutex);
+            ctx->vthr_eos = eos_reported = true;
+        }
 
         if(pause_req != last_paused){
             last_paused = local_paused = pause_req;
             ctx->vidclk.set_paused(local_paused);
         }
 
-        if(local_paused || eof){
+        if(local_paused || eos){
             wait_timeout();
             continue;
         }
@@ -804,7 +813,7 @@ static int demux_thread(VideoState* is)
     bool realtime = false, local_paused = false, queue_attachments_req = false, seek_by_bytes = false;
     int64_t last_seek_pos = 0, last_seek_rel = 0;
     int seek_flags = 0, err = 0;
-    bool eof = false;
+    bool demux_eof = false, video_eos = false, audio_eos = false;
 
     auto set_seek = [&](int64_t pos, int64_t rel, bool by_bytes)
     {
@@ -881,11 +890,11 @@ static int demux_thread(VideoState* is)
 
     if(stream_component_open(is, ic, st_index[AVMEDIA_TYPE_VIDEO]) >= 0){
         queue_attachments_req = true;
-        eof = false;
+        demux_eof = false;
     }
 
     if(stream_component_open(is, ic, st_index[AVMEDIA_TYPE_AUDIO]) >= 0){
-        eof = false;
+        demux_eof = false;
     }
 
     if (is->video_stream < 0 && is->audio_stream < 0) {
@@ -968,7 +977,7 @@ static int demux_thread(VideoState* is)
                     default:
                         break;
                     }
-
+                    /*Execute the seek*/
                     const int64_t seek_target = last_seek_pos;
                     const int64_t seek_min    = last_seek_rel > 0 ? seek_target - last_seek_rel + 2: INT64_MIN;
                     const int64_t seek_max    = last_seek_rel < 0 ? seek_target - last_seek_rel - 2: INT64_MAX;
@@ -979,37 +988,39 @@ static int demux_thread(VideoState* is)
                     if (seekRes < 0) {
                         av_log(NULL, AV_LOG_ERROR, "%s: error while seeking\n", ic->url);
                     } else {
-                        if (is->audio_stream >= 0)
+                        if (is->audio_stream >= 0){
                             is->audioq.flush();
-                        if (is->subtitle_stream >= 0)
-                            is->subtitleq.flush();
-                        if (is->video_stream >= 0)
+                            is->athr_eos = false;
+                        }
+                        if (is->video_stream >= 0){
                             is->videoq.flush();
+                            is->vthr_eos = false;
+                        }
+                        is->subtitleq.flush();
                     }
                     seek_flags = 0;
                     is->flush_athr = is->flush_vthr = queue_attachments_req = true;
-                    eof = false;
+                    demux_eof = false;
                 }
             }
+
+            video_eos = is->video_st && is->vthr_eos;
+            audio_eos = is->audio_st && is->athr_eos;
         }
 
-        /* if the queues are full, no need to read more */
         if (!realtime && check_buffer_fullness(is->audio_st, is->audioq, is->video_st, is->videoq)) {
-            /* wait 10 ms */
             wait_timeout();
             continue;
         }
 
-        // if (!local_paused &&
-        //     (!is->audio_st || (is->auddec.finished == is->audioq.serial && is->sampq.nb_remaining() == 0)) &&
-        //     (!is->video_st || (is->viddec.finished == is->videoq.serial && is->pictq.nb_remaining() == 0))) {
-        //     if (loop != 1 && (!loop || --loop)) {
-        //         stream_seek(is, 0, 0, 0);
-        //     } else if (autoexit) {
-        //         ret = AVERROR_EOF;
-        //         goto fail;
-        //     }
-        // }
+        if (!local_paused && demux_eof && video_eos && audio_eos) {
+            /*if (loop != 1 && (!loop || --loop)) {
+                stream_seek(is, 0, 0, 0);
+            } else if (autoexit) {
+                ret = AVERROR_EOF;
+                goto fail;
+            }*/
+        }
 
         if (queue_attachments_req) {
             if (is->video_st && is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC) {
@@ -1033,21 +1044,21 @@ static int demux_thread(VideoState* is)
         CAVPacket cpkt;
         const auto readRes = av_read_frame(ic, cpkt.av());
         if (readRes < 0) {
-            if ((readRes == AVERROR_EOF || avio_feof(ic->pb)) && !eof) {
+            if ((readRes == AVERROR_EOF || avio_feof(ic->pb)) && !demux_eof) {
                 if (is->video_stream >= 0)
                     is->videoq.put_nullpacket();
                 if (is->audio_stream >= 0)
                     is->audioq.put_nullpacket();
                 if (is->subtitle_stream >= 0)
                     is->subtitleq.put_nullpacket();
-                eof = true;
+                demux_eof = true;
             }
             if (ic->pb && ic->pb->error) {
                 break;
             }
             wait_timeout();
         } else {
-            eof = false;
+            demux_eof = false;
             auto pkt = cpkt.av();
             if (pkt->stream_index == is->audio_stream) {
                 is->audioq.put(std::move(cpkt));
@@ -1308,7 +1319,7 @@ void PlayerCore::createSDLRenderer(){
 void PlayerCore::destroySDLRenderer(){
     if(video_renderer){
         QMetaObject::invokeMethod(video_dw, &VideoDisplayWidget::destroySDLRenderer, Qt::QueuedConnection);
-        QThread::msleep(50);//Wait for the renderer to be destroyed
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));//Wait for the renderer to be destroyed(ugly)
         video_renderer = nullptr;
     }
 }

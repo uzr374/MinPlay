@@ -19,7 +19,7 @@ private:
     double clock_pts_drift = 0.0;     /* clock base minus time at which we updated the clock */
     double clock_last_updated = 0.0;
     double clock_speed = 1.0;
-    bool clock_paused = false;
+    bool clock_paused = false, eos = false;
     mutable std::mutex mutex;
 
 private:
@@ -33,11 +33,12 @@ public:
 
     double get() const;
     void set(double pts, double time = gettime_s());
-    void init();
+    void deactivate();
     double last_upd() const;
     bool is_paused() const;
     double pts() const;
     void set_paused(bool paused);
+    void set_eos(bool eos, double ts);
 };
 
 #endif // CLOCK_H

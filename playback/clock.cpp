@@ -5,7 +5,7 @@
 double Clock::get() const
 {
     std::unique_lock lck(mutex);
-    if (clock_paused || std::isnan(clock_pts)) {
+    if (eos || clock_paused || std::isnan(clock_pts)) {
         return clock_pts;
     } else {
         const auto time = gettime_s();
@@ -26,11 +26,18 @@ void Clock::set(double pts, double time)
     set_at(pts, time);
 }
 
-void Clock::init()
+void Clock::deactivate()
 {
+    std::unique_lock lck(mutex);
     clock_speed = 1.0;
-    clock_paused = 0;
-    set(NAN, -1);
+    clock_paused = eos = false;
+    set_at(NAN, 0.0);
+}
+
+void Clock::set_eos(bool eos, double ts){
+    std::scoped_lock lck(mutex);
+    this->eos = eos;
+    set_at(ts, gettime_s());
 }
 
 double Clock::last_upd() const {return clock_last_updated;}
