@@ -490,19 +490,19 @@ void audio_render_thread(VideoState* ctx){
 /* no AV correction is done if too big error */
 #define AV_NOSYNC_THRESHOLD 10.0
 
-static double compute_target_delay(double delay, VideoState *is)
+static double compute_target_delay(double delay, VideoState *ctx, double max_duration)
 {
-    if(is->audio_st){
-        /* update delay to follow main synchronisation source */
-        /* if video is subordinate, we try to correct big delays by
+    if(ctx->audio_st){
+        /* update delay to follow leading synchronisation source */
+        /* if video is not lead, we try to correct big delays by
            duplicating or deleting a frame */
-        const double diff = is->vidclk.get() - is->audclk.get();
+        const double diff = ctx->vidclk.get() - ctx->audclk.get();
 
         /* skip or repeat frame. We take into account the
            delay to compute the threshold. I still don't know
            if it is the best guess */
         const double sync_threshold = std::max(AV_SYNC_THRESHOLD_MIN, std::min(AV_SYNC_THRESHOLD_MAX, delay));
-        if (!isnan(diff) && fabs(diff) < is->max_frame_duration) {
+        if (!isnan(diff) && fabs(diff) < max_duration) {
             if (diff <= -sync_threshold)
                 delay = std::max(0.0, delay + diff);
             else if (diff >= sync_threshold && delay > AV_SYNC_FRAMEDUP_THRESHOLD)
@@ -616,7 +616,7 @@ void video_render_thread(VideoState* ctx){
             auto& vp = decoded_frames.front();
 
             const auto nom_last_duration = vp_duration(vp, last_pts, last_duration, max_frame_duration);
-            const auto delay = compute_target_delay(nom_last_duration, ctx);
+            const auto delay = compute_target_delay(nom_last_duration, ctx, max_frame_duration);
             const auto time = gettime_s();
             const auto next_frame_time = frame_timer + delay;
             if (!force_frame && time < next_frame_time) {
