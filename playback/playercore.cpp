@@ -801,7 +801,7 @@ static int demux_thread(VideoState* is)
 {
     int st_index[AVMEDIA_TYPE_NB];
     AVDictionary* format_opts = nullptr;
-    bool realtime = false, last_paused = false, local_paused = false, queue_attachments_req = false, seek_by_bytes = false;
+    bool realtime = false, local_paused = false, queue_attachments_req = false, seek_by_bytes = false;
     int64_t last_seek_pos = 0, last_seek_rel = 0;
     int seek_flags = 0, err = 0;
     bool eof = false;
@@ -899,96 +899,97 @@ static int demux_thread(VideoState* is)
     while (!quitRequested()) {
         {
             std::scoped_lock lck(is->demux_mutex);
-            const bool pause_requested = is->pause_req;
-            if (pause_requested != last_paused) {
-                local_paused = last_paused = pause_requested;
-                const auto ret = local_paused ? av_read_pause(ic) : av_read_play(ic);
+            const bool pause_changed = (is->pause_req != local_paused);
+            const bool seek_requested = is->seek_req;
+            is->seek_req = false;
+            if (pause_changed || seek_requested) {
+                if(pause_changed){
+                    local_paused = !local_paused;
+                    const auto ret = local_paused ? av_read_pause(ic) : av_read_play(ic);
+                }
                 auto lck1 = is->videoq.getLocker();
                 auto lck2 = is->audioq.getLocker();
-                is->athr_pause_req = is->vthr_pause_req = local_paused;//Forward pause/unpause
-            }
-
-            if (is->seek_req) {
-                auto lck1 = is->videoq.getLocker();
-                auto lck2 = is->audioq.getLocker();
-                auto lck3 = is->subtitleq.getLocker();
-                const auto info = is->seek_info;
-                switch(info.type){
-                case SeekInfo::SEEK_PERCENT:
-                    if (seek_by_bytes || ic->duration <= 0) {
-                        const uint64_t size =  avio_size(ic->pb);
-                        set_seek(size*info.percent, 0, true);
-                    } else {
-                        const auto tns  = ic->duration / AV_TIME_BASE;
-                        const int thh  = tns / 3600;
-                        const int tmm  = (tns % 3600) / 60;
-                        const int tss  = (tns % 60);
-                        const double frac = info.percent;
-                        const int ns   = frac * tns;
-                        const int hh   = ns / 3600;
-                        const int mm   = (ns % 3600) / 60;
-                        const int ss   = (ns % 60);
-                        const int64_t ts = frac * ic->duration + (ic->start_time == AV_NOPTS_VALUE ? 0LL : ic->start_time);
-                        set_seek(ts, 0, false);
-                        av_log(NULL, AV_LOG_INFO, "Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)\n", frac*100,
-                               hh, mm, ss, thh, tmm, tss);
+                if(pause_changed)
+                    is->athr_pause_req = is->vthr_pause_req = local_paused;//Forward pause/unpause to the worker threads
+                if(seek_requested){
+                    auto lck3 = is->subtitleq.getLocker();
+                    const auto info = is->seek_info;
+                    switch(info.type){
+                    case SeekInfo::SEEK_PERCENT:
+                        if (seek_by_bytes || ic->duration <= 0) {
+                            const uint64_t size =  avio_size(ic->pb);
+                            set_seek(size*info.percent, 0, true);
+                        } else {
+                            const auto tns  = ic->duration / AV_TIME_BASE;
+                            const int thh  = tns / 3600;
+                            const int tmm  = (tns % 3600) / 60;
+                            const int tss  = (tns % 60);
+                            const double frac = info.percent;
+                            const int ns   = frac * tns;
+                            const int hh   = ns / 3600;
+                            const int mm   = (ns % 3600) / 60;
+                            const int ss   = (ns % 60);
+                            const int64_t ts = frac * ic->duration + (ic->start_time == AV_NOPTS_VALUE ? 0LL : ic->start_time);
+                            set_seek(ts, 0, false);
+                            av_log(NULL, AV_LOG_INFO, "Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)\n", frac*100,
+                                   hh, mm, ss, thh, tmm, tss);
+                        }
+                        break;
+                    case SeekInfo::SEEK_INCREMENT:
+                    {
+                        double incr = info.increment;
+                        if(incr < 0.0)
+                            seek_flags |= AVSEEK_FLAG_BACKWARD;
+                        if (seek_by_bytes) {
+                            int64_t pos = -1;
+                            if (is->audio_stream >= 0)
+                                pos = is->last_audio_pos;
+                            if (pos < 0 && is->video_stream >= 0)
+                                pos = is->last_video_pos;
+                            if (pos < 0)
+                                pos = avio_tell(ic->pb);
+                            if (ic->bit_rate)
+                                incr *= ic->bit_rate / 8.0;//get the byte size
+                            else
+                                incr *= 180000.0;
+                            pos += incr;
+                            set_seek(pos, incr, true);
+                        } else {
+                            double pos = is->audio_st? is->last_audio_pts : is->last_video_pts;
+                            if (isnan(pos))
+                                pos = (double)last_seek_pos / AV_TIME_BASE;
+                            pos += incr;
+                            if (ic->start_time != AV_NOPTS_VALUE && pos < ic->start_time / (double)AV_TIME_BASE)
+                                pos = ic->start_time / (double)AV_TIME_BASE;
+                            set_seek((int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), false);
+                        }
                     }
                     break;
-                case SeekInfo::SEEK_INCREMENT:
-                {
-                    double incr = info.increment;
-                    if(incr < 0.0)
-                        seek_flags |= AVSEEK_FLAG_BACKWARD;
-                    if (seek_by_bytes) {
-                        int64_t pos = -1;
+                    default:
+                        break;
+                    }
+
+                    const int64_t seek_target = last_seek_pos;
+                    const int64_t seek_min    = last_seek_rel > 0 ? seek_target - last_seek_rel + 2: INT64_MIN;
+                    const int64_t seek_max    = last_seek_rel < 0 ? seek_target - last_seek_rel - 2: INT64_MAX;
+                    // FIXME the +-2 is due to rounding being not done in the correct direction in generation
+                    //      of the seek_pos/seek_rel variables
+
+                    const auto seekRes = avformat_seek_file(ic, -1, seek_min, seek_target, seek_max, seek_flags);
+                    if (seekRes < 0) {
+                        av_log(NULL, AV_LOG_ERROR, "%s: error while seeking\n", ic->url);
+                    } else {
                         if (is->audio_stream >= 0)
-                            pos = is->last_audio_pos;
-                        if (pos < 0 && is->video_stream >= 0)
-                            pos = is->last_video_pos;
-                        if (pos < 0)
-                            pos = avio_tell(ic->pb);
-                        if (ic->bit_rate)
-                            incr *= ic->bit_rate / 8.0;//get the byte size
-                        else
-                            incr *= 180000.0;
-                        pos += incr;
-                        set_seek(pos, incr, true);
-                    } else {
-                        double pos = is->audio_st? is->last_audio_pts : is->last_video_pts;
-                        if (isnan(pos))
-                            pos = (double)last_seek_pos / AV_TIME_BASE;
-                        pos += incr;
-                        if (ic->start_time != AV_NOPTS_VALUE && pos < ic->start_time / (double)AV_TIME_BASE)
-                            pos = ic->start_time / (double)AV_TIME_BASE;
-                        set_seek((int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), false);
+                            is->audioq.flush();
+                        if (is->subtitle_stream >= 0)
+                            is->subtitleq.flush();
+                        if (is->video_stream >= 0)
+                            is->videoq.flush();
                     }
+                    seek_flags = 0;
+                    is->flush_athr = is->flush_vthr = queue_attachments_req = true;
+                    eof = false;
                 }
-                    break;
-                default:
-                    break;
-                }
-
-                const int64_t seek_target = last_seek_pos;
-                const int64_t seek_min    = last_seek_rel > 0 ? seek_target - last_seek_rel + 2: INT64_MIN;
-                const int64_t seek_max    = last_seek_rel < 0 ? seek_target - last_seek_rel - 2: INT64_MAX;
-                // FIXME the +-2 is due to rounding being not done in the correct direction in generation
-                //      of the seek_pos/seek_rel variables
-
-                const auto seekRes = avformat_seek_file(ic, -1, seek_min, seek_target, seek_max, seek_flags);
-                if (seekRes < 0) {
-                    av_log(NULL, AV_LOG_ERROR, "%s: error while seeking\n", ic->url);
-                } else {
-                    if (is->audio_stream >= 0)
-                        is->audioq.flush();
-                    if (is->subtitle_stream >= 0)
-                        is->subtitleq.flush();
-                    if (is->video_stream >= 0)
-                        is->videoq.flush();
-                }
-                seek_flags = 0;
-                is->seek_req = false;
-                is->flush_athr = is->flush_vthr = queue_attachments_req = true;
-                eof = false;
             }
         }
 
