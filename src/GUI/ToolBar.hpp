@@ -15,6 +15,8 @@ public:
     explicit ToolBar(QWidget* parent);
 
     Q_SIGNAL void sigSeek(double percent);
+    Q_SLOT void updatePlaybackPos(double pos, double dur);
+    Q_SLOT void setActive(bool active);
 };
 
 #endif // TOOLBAR_HPP

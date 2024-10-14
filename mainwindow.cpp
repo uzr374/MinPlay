@@ -40,6 +40,10 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_menus, &MenuBarMenu::pausePlayback, core, &PlayerCore::pausePlayback);
     connect(m_menus, &MenuBarMenu::resumePlayback, core, &PlayerCore::resumePlayback);
     connect(tBar, &ToolBar::sigSeek, core, &PlayerCore::requestSeekPercent);
+    connect(core, &PlayerCore::updatePlaybackPos, tBar, &ToolBar::updatePlaybackPos);
+    connect(core, &PlayerCore::updatePlaybackPos, sBar, &StatusBar::updatePlaybackPos);
+    connect(core, &PlayerCore::setControlsActive, tBar, &ToolBar::setActive);
+    connect(core, &PlayerCore::setControlsActive, sBar, &StatusBar::setActive);
 }
 
 MainWindow::~MainWindow() {

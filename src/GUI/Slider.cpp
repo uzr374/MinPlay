@@ -8,6 +8,7 @@ Slider::Slider(QWidget* parent, int stretch) : QSlider(Qt::Horizontal, parent) {
     sPolicy.setHorizontalStretch(stretch);
     setSizePolicy(sPolicy);
     setTracking(true);
+    setMouseTracking(true);
     setRange(MIN_VAL, MAX_VAL);
     setSingleStep(MAX_VAL/10);
     setPageStep(MAX_VAL/50);
@@ -30,5 +31,7 @@ void Slider::mouseReleaseEvent(QMouseEvent* evt){
 }
 
 void Slider::setPos(double percent){
+    is_being_updated = true;
     setValue(percent * (maximum() - minimum()));
+    is_being_updated = false;
 }

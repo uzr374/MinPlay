@@ -63,6 +63,8 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         playback/sdlkeymap.hpp
         src/GUI/StatusBar.hpp src/GUI/StatusBar.cpp
         src/GUI/Slider.hpp src/GUI/Slider.cpp
+        src/utils.hpp
+        src/utils.cpp
 
 
     )

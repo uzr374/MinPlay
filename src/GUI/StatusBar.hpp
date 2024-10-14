@@ -12,6 +12,9 @@ class StatusBar final : public QStatusBar
 
 public:
     explicit StatusBar(QWidget* parent = nullptr);
+
+    Q_SLOT void updatePlaybackPos(double pos, double dur);
+    Q_SLOT void setActive(bool active);
 };
 
 #endif // STATUSBAR_HPP

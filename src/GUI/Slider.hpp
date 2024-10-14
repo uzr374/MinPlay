@@ -10,9 +10,12 @@ class Slider : public QSlider
     void mousePressEvent(QMouseEvent* evt) override;
     void mouseReleaseEvent(QMouseEvent* evt) override;
     void handleMouseEvt(QMouseEvent* evt);
+
+    bool is_being_updated = false;
 public:
     Slider(QWidget* parent = nullptr, int stretch = 0);
     void setPos(double percent);
+    inline bool falseUpdate() const{return is_being_updated;}
 };
 
 #endif // SLIDER_HPP

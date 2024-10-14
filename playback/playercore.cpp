@@ -462,6 +462,7 @@ void audio_render_thread(VideoState* ctx){
             last_pts = af.ts();
             last_duration = af.dur();
             last_byte_pos = af.pktPos();
+            emit playerCore.sigUpdateStreamPos(last_pts);
             const auto adata = convert_audio_frame(af, audio_src, audio_tgt, swr_ctx);
             decoded_frames.pop_front();
             if(!adata.empty()){
@@ -641,6 +642,7 @@ void video_render_thread(VideoState* ctx){
 
             if (!isnan(last_pts))
                 ctx->vidclk.set(last_pts, time);
+            emit playerCore.sigUpdateStreamPos(last_pts);
 
             if(!force_frame){
                 last_duration = nom_last_duration;
@@ -856,10 +858,10 @@ static int demux_thread(VideoState* is)
         ic->pb->eof_reached = 0; // FIXME hack, ffplay maybe should not use avio_feof() to test for the end
 
     seek_by_bytes = !(ic->iformat->flags & AVFMT_NO_BYTE_SEEK) &&
-                        !!(ic->iformat->flags & AVFMT_TS_DISCONT) &&
-                        strcmp("ogg", ic->iformat->name);
-
+                        !!(ic->iformat->flags & AVFMT_TS_DISCONT) && strcmp("ogg", ic->iformat->name);
     is->max_frame_duration = (ic->iformat->flags & AVFMT_TS_DISCONT) ? 10.0 : 3600.0;
+
+    emit playerCore.sigReportStreamDuration(ic->duration/(double)AV_TIME_BASE);
 
     /*if (!window_title && (t = av_dict_get(ic->metadata, "title", NULL, 0)))
         window_title = av_asprintf("%s - %s", t->value, input_filename);*/
@@ -904,6 +906,7 @@ static int demux_thread(VideoState* is)
     }
 
     stream_component_open(is, ic, st_index[AVMEDIA_TYPE_SUBTITLE]);
+    emit playerCore.setControlsActive(true);
 
     while (!quitRequested()) {
         {
@@ -1075,6 +1078,8 @@ fail:
     stream_component_close(is, ic, is->audio_stream);
     stream_component_close(is, ic, is->video_stream);
     stream_component_close(is, ic, is->subtitle_stream);
+
+    emit playerCore.setControlsActive(false);
 
     avformat_close_input(&ic);
 
@@ -1324,6 +1329,17 @@ void PlayerCore::destroySDLRenderer(){
     }
 }
 
+void PlayerCore::reportStreamDuration(double dur){
+    stream_duration = dur;
+}
+
+void PlayerCore::updateStreamPos(double pos){
+    cur_pos = pos;
+    emit updatePlaybackPos(pos, stream_duration);
+}
+
+
+
 static PlayerCore* plcore_inst = nullptr;
 
 PlayerCore& PlayerCore::instance() {
@@ -1332,6 +1348,9 @@ PlayerCore& PlayerCore::instance() {
 
 PlayerCore::PlayerCore(QObject* parent, VideoDisplayWidget* dw): QObject(parent), video_dw(dw){
     plcore_inst = this;
+
+    connect(this, &PlayerCore::sigReportStreamDuration, this, &PlayerCore::reportStreamDuration);
+    connect(this, &PlayerCore::sigUpdateStreamPos, this, &PlayerCore::updateStreamPos);
 }
 
 PlayerCore::~PlayerCore(){
