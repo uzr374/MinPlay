@@ -376,7 +376,7 @@ void audio_render_thread(VideoState* ctx){
     auto astream = audio_open(audio_tgt.ch_layout, audio_tgt.freq);
     if(!astream) return;
 
-    bool local_paused = false, last_paused = false;
+    bool local_paused = false;
     SwrContext *swr_ctx = nullptr;
     std::list<CAVFrame> decoded_frames;
     bool eos = false, eos_reported = false, flush = false;
@@ -414,8 +414,8 @@ void audio_render_thread(VideoState* ctx){
             ctx->last_audio_pos = last_byte_pos;
         params_lck.unlock();
 
-        if(pause_req != last_paused){
-            last_paused = local_paused = pause_req;
+        if(pause_req != local_paused){
+            local_paused = pause_req;
             const bool success = local_paused ? SDL_PauseAudioStreamDevice(astream) : SDL_ResumeAudioStreamDevice(astream);
             ctx->audclk.set_paused(local_paused);
         }
@@ -537,7 +537,7 @@ void video_render_thread(VideoState* ctx){
     static constexpr auto framebuffer_preferred_size = 2;//Try to keep 2 CAVFrames worth of data buffered in decoded_frames
     static constexpr auto REFRESH_RATE = 0.01;//Should be less than 1/fps
     const double max_frame_duration = ctx->max_frame_duration;
-    bool local_paused = false, last_paused = false;
+    bool local_paused = false;
     SwsContext *sub_convert_ctx = nullptr;
     std::list<CAVFrame> decoded_frames;
     bool eos = false, eos_reported = false, flush = false, update_frame_timer = false, force_frame = true;
@@ -594,14 +594,14 @@ void video_render_thread(VideoState* ctx){
         }
 
         eos = decoded_frames.empty() && dec.eofReached();
-        if(eos && eos_reported){
+        if(eos && !eos_reported){
             ctx->vidclk.set_eos(true, last_pts);
             std::scoped_lock dlck(ctx->demux_mutex);
             ctx->vthr_eos = eos_reported = true;
         }
 
-        if(pause_req != last_paused){
-            last_paused = local_paused = pause_req;
+        if(pause_req != local_paused){
+            local_paused = pause_req;
             ctx->vidclk.set_paused(local_paused);
         }
 
