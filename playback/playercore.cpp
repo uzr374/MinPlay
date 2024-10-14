@@ -320,28 +320,27 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
         adata = std::vector<float>(out_count * audio_tgt.ch_layout.nbChannels(), 0.0f);
         auto out = reinterpret_cast<uint8_t*>(adata.data());
         const int len2 = swr_convert(swr_ctx, &out, out_count, in, af.nbSamples());
-        if (len2 < 0) {
-            av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
-            return std::vector<float>();
-        }
-
-        adata.resize(len2 * audio_tgt.ch_layout.nbChannels());
-
-        if(flush){
-            const auto nb_remaining_samples = swr_get_out_samples(swr_ctx, 0);
-            if (nb_remaining_samples < 0) {
-                av_log(NULL, AV_LOG_ERROR, "swr_get_out_samples() failed\n");
-                return adata;
-            } else if(nb_remaining_samples > 0){
-                std::vector<float> remaining_samples(nb_remaining_samples, 0.0f);
-                out = reinterpret_cast<uint8_t*>(remaining_samples.data());
-                const int len2 = swr_convert(swr_ctx, &out, nb_remaining_samples, nullptr, 0);
-                if (len2 < 0) {
-                    av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
-                } else if(len2 > 0){
-                    remaining_samples.resize(len2 * audio_tgt.ch_layout.nbChannels());
-                    adata.reserve(adata.size() + remaining_samples.size());
-                    adata.insert(adata.end(), remaining_samples.begin(), remaining_samples.end());
+        if (len2 <= 0) {
+            if(len2 < 0)
+                av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
+            adata.clear();
+        } else {
+            adata.resize(len2 * audio_tgt.ch_layout.nbChannels());
+            if(flush){
+                const auto nb_remaining_samples = swr_get_out_samples(swr_ctx, 0);
+                if (nb_remaining_samples < 0) {
+                    av_log(NULL, AV_LOG_ERROR, "swr_get_out_samples() failed\n");
+                } else if(nb_remaining_samples > 0){
+                    std::vector<float> remaining_samples(nb_remaining_samples, 0.0f);
+                    out = reinterpret_cast<uint8_t*>(remaining_samples.data());
+                    const int len2 = swr_convert(swr_ctx, &out, nb_remaining_samples, nullptr, 0);
+                    if (len2 < 0) {
+                        av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
+                    } else if(len2 > 0){
+                        remaining_samples.resize(len2 * audio_tgt.ch_layout.nbChannels());
+                        adata.reserve(adata.size() + remaining_samples.size());
+                        adata.insert(adata.end(), remaining_samples.begin(), remaining_samples.end());
+                    }
                 }
             }
         }
