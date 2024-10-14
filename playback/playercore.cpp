@@ -371,7 +371,7 @@ void audio_render_thread(VideoState* ctx){
 
     auto& dec = *ctx->auddec;
     const auto audio_tgt = ([&dec]{auto format = dec.outputAudioFormat(); format.fmt = AV_SAMPLE_FMT_FLT; return format;})();
-    auto audio_src = audio_tgt;
+    AudioParams audio_src;
 
     auto astream = audio_open(audio_tgt.ch_layout, audio_tgt.freq);
     if(!astream) return;
@@ -423,8 +423,10 @@ void audio_render_thread(VideoState* ctx){
         if(flush_req){
             decoded_frames.clear();
             SDL_ClearAudioStream(astream);
+            swr_free(&swr_ctx);
+            audio_src = AudioParams();
             dec.flush();
-            eos = eos_reported = false;
+            eos_reported = false;
             last_pts = last_duration = 0.0;
             last_byte_pos = -1;
             pkt.unref();
