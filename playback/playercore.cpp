@@ -302,7 +302,7 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
             return adata;
         }
         av_log(NULL, AV_LOG_INFO,
-               "Created a sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!\n",
+               "Created a sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels\n",
                af.sampleRate(), av_get_sample_fmt_name(af.sampleFmt()), af.chCount(),
                audio_tgt.freq, av_get_sample_fmt_name(audio_tgt.fmt), audio_tgt.ch_layout.nbChannels());
         audio_src.ch_layout = CAVChannelLayout(af.chLayout());
@@ -312,9 +312,9 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
 
     if (swr_ctx) {
         const uint8_t * const*in = af.extData();
-        const int out_count = swr_get_out_samples(swr_ctx, af.nbSamples()) + 1024;//int64_t)af.nbSamples() * audio_tgt.freq / af.sampleRate() + 1024;
+        const int out_count = swr_get_out_samples(swr_ctx, af.nbSamples());
         if (out_count < 0) {
-            av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size() failed\n");
+            av_log(NULL, AV_LOG_ERROR, "swr_get_out_samples() failed\n");
             return adata;
         }
 
@@ -326,11 +326,7 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
             av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
             return std::vector<float>();
         }
-        if (len2 == out_count) {
-            av_log(NULL, AV_LOG_WARNING, "audio buffer is probably too small\n");
-            if (swr_init(swr_ctx) < 0)
-                swr_free(&swr_ctx);
-        }
+
         adata.resize(len2 * audio_tgt.ch_layout.nbChannels());
     } else {
         const auto data_ptr = reinterpret_cast<const float*>(af.constDataPlane(0));
