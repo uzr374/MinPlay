@@ -282,8 +282,7 @@ static double get_lead_clock(VideoState *is)
 // }
 
 static std::vector<float> convert_audio_frame(const CAVFrame& af,
-                                              AudioParams& audio_src, const AudioParams& audio_tgt,  SwrContext*& swr_ctx)
-{
+                                              AudioParams& audio_src, const AudioParams& audio_tgt,  SwrContext*& swr_ctx, bool flush){
     std::vector<float> adata;
 
     if (af.sampleFmt() != audio_src.fmt || af.sampleRate() != audio_src.freq ||
@@ -318,9 +317,8 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
             return adata;
         }
 
-        adata.resize(out_count * audio_tgt.ch_layout.nbChannels());
+        adata = std::vector<float>(out_count * audio_tgt.ch_layout.nbChannels(), 0.0f);
         auto out = reinterpret_cast<uint8_t*>(adata.data());
-
         const int len2 = swr_convert(swr_ctx, &out, out_count, in, af.nbSamples());
         if (len2 < 0) {
             av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
@@ -328,6 +326,25 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
         }
 
         adata.resize(len2 * audio_tgt.ch_layout.nbChannels());
+
+        if(flush){
+            const auto nb_remaining_samples = swr_get_out_samples(swr_ctx, 0);
+            if (nb_remaining_samples < 0) {
+                av_log(NULL, AV_LOG_ERROR, "swr_get_out_samples() failed\n");
+                return adata;
+            } else if(nb_remaining_samples > 0){
+                std::vector<float> remaining_samples(nb_remaining_samples, 0.0f);
+                out = reinterpret_cast<uint8_t*>(remaining_samples.data());
+                const int len2 = swr_convert(swr_ctx, &out, nb_remaining_samples, nullptr, 0);
+                if (len2 < 0) {
+                    av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
+                } else if(len2 > 0){
+                    remaining_samples.resize(len2 * audio_tgt.ch_layout.nbChannels());
+                    adata.reserve(adata.size() + remaining_samples.size());
+                    adata.insert(adata.end(), remaining_samples.begin(), remaining_samples.end());
+                }
+            }
+        }
     } else {
         const auto data_ptr = reinterpret_cast<const float*>(af.constDataPlane(0));
         adata = std::vector<float>(data_ptr, data_ptr + af.nbSamples() * af.chCount());
@@ -461,10 +478,15 @@ void audio_render_thread(VideoState* ctx){
             last_duration = af.dur();
             last_byte_pos = af.pktPos();
             emit playerCore.sigUpdateStreamPos(last_pts);
-            const auto adata = convert_audio_frame(af, audio_src, audio_tgt, swr_ctx);
+            const bool eos_upcoming = dec.eofReached() && decoded_frames.size() == 1;
+            const auto adata = convert_audio_frame(af, audio_src, audio_tgt, swr_ctx, eos_upcoming);
             decoded_frames.pop_front();
+
             if(!adata.empty()){
                 SDL_PutAudioStreamData(astream, adata.data(), adata.size() * sizeof(float));
+                if(eos_upcoming){
+                    SDL_FlushAudioStream(astream);
+                }
                 if (!isnan(last_pts)) {
                     ctx->audclk.set(last_pts + last_duration - get_buffered_duration(astream));
                 }
@@ -475,7 +497,6 @@ void audio_render_thread(VideoState* ctx){
     }
 
     if(astream){
-        SDL_FlushAudioStream(astream);//Also do this on EOF
         SDL_DestroyAudioStream(astream);
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
     }
