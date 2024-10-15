@@ -6,6 +6,7 @@
 #include "src/GUI/ToolBar.hpp"
 #include "src/GUI/StatusBar.hpp"
 #include "src/GUI/AppEventFilter.hpp"
+#include "src/GUI/LoggerWidget.h"
 
 #include <QScreen>
 #include <QDebug>
@@ -34,7 +35,12 @@ MainWindow::MainWindow(QWidget *parent)
     auto vWidget = static_cast<VideoDisplayWidget*>(vDock->widget());
     addDockWidget(Qt::LeftDockWidgetArea, vDock);
 
-    core = new PlayerCore(this, vWidget);
+    auto loggerDock = new CDockWidget(this);
+    auto logger = new LoggerWidget();
+    loggerDock->setWidget(logger);
+    addDockWidget(Qt::RightDockWidgetArea, loggerDock);
+
+    core = new PlayerCore(this, vWidget, logger);
     auto app_evt_filter = new AppEventFilter(this);
     QApplication::instance()->installEventFilter(app_evt_filter);
 

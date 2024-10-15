@@ -2,6 +2,7 @@
 #define PLAYERCORE_HPP
 
 #include "../src/GUI/videodisplaywidget.hpp"
+#include "../src/GUI/LoggerWidget.h"
 #include "PacketQueue.hpp"
 #include "clock.hpp"
 #include "decoder.hpp"
@@ -72,6 +73,7 @@ private:
     ~PlayerCore();
 
     VideoDisplayWidget* video_dw = nullptr;
+    LoggerWidget* loggerW = nullptr;
     SDLRenderer* video_renderer = nullptr;
     std::unique_ptr<VideoState> player_ctx;
     float audio_vol = 1.0f;
@@ -81,12 +83,13 @@ private:
     bool is_active();
 
 public:
-   PlayerCore(QObject* parent, VideoDisplayWidget* video_dw);
+   PlayerCore(QObject* parent, VideoDisplayWidget* video_dw, LoggerWidget* logW);
    static PlayerCore& instance();
 
    inline SDLRenderer* sdlRenderer(){return video_renderer;}
    void createSDLRenderer();
    void destroySDLRenderer();
+   void log(const char* fmt, ...);
 
    public slots:
         void openURL(QString url);

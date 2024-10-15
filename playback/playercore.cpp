@@ -1,6 +1,7 @@
 #include "playercore.hpp"
 
 #include <QApplication>
+#include <cstdarg>
 
 extern "C"{
 #include "libavutil/dict.h"
@@ -863,7 +864,7 @@ static int demux_thread(VideoState* is)
 
     auto ic = avformat_alloc_context();
     if (!ic) {
-        av_log(NULL, AV_LOG_FATAL, "Could not allocate context.\n");
+        playerCore.log("Could not allocate context.");
         goto fail;
     }
     ic->interrupt_callback.callback = decode_interrupt_cb;
@@ -877,7 +878,7 @@ static int demux_thread(VideoState* is)
 
     ic->flags |= AVFMT_FLAG_GENPTS;
     if (avformat_find_stream_info(ic, nullptr) < 0) {
-        av_log(NULL, AV_LOG_WARNING, "Could not find codec parameters\n");
+        playerCore.log("Could not find codec parameters");
         goto fail;
     }
 
@@ -927,8 +928,7 @@ static int demux_thread(VideoState* is)
     }
 
     if (is->video_stream < 0 && is->audio_stream < 0) {
-        av_log(NULL, AV_LOG_FATAL, "Failed to open file '%s'\n",
-               is->url.c_str());
+        playerCore.log("Failed to open file '%s'",  ic->url);
         goto fail;
     }
 
@@ -971,7 +971,7 @@ static int demux_thread(VideoState* is)
                             const int ss   = (ns % 60);
                             const int64_t ts = frac * ic->duration + (ic->start_time == AV_NOPTS_VALUE ? 0LL : ic->start_time);
                             set_seek(ts, 0, false);
-                            av_log(NULL, AV_LOG_INFO, "Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)\n", frac*100,
+                            playerCore.log("Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)", frac*100,
                                    hh, mm, ss, thh, tmm, tss);
                         }
                         break;
@@ -1017,7 +1017,7 @@ static int demux_thread(VideoState* is)
 
                     const auto seekRes = avformat_seek_file(ic, -1, seek_min, seek_target, seek_max, seek_flags);
                     if (seekRes < 0) {
-                        av_log(NULL, AV_LOG_ERROR, "%s: error while seeking\n", ic->url);
+                        playerCore.log("%s: error while seeking", ic->url);
                     } else {
                         if (is->audio_stream >= 0){
                             is->audioq.flush();
@@ -1182,7 +1182,7 @@ static void stream_cycle_channel(VideoState *is, AVFormatContext* ic, AVMediaTyp
 the_end:
     if (p && stream_index != -1)
         stream_index = p->stream_index[stream_index];
-    av_log(NULL, AV_LOG_INFO, "Switch %s stream from #%d to #%d\n",
+    playerCore.log("Switch %s stream from #%d to #%d\n",
            av_get_media_type_string(codec_type), old_index, stream_index);
 
     stream_component_close(is, ic, old_index);
@@ -1368,7 +1368,13 @@ void PlayerCore::updateStreamPos(double pos){
     emit updatePlaybackPos(pos, stream_duration);
 }
 
-
+void PlayerCore::log(const char* fmt, ...){
+    std::va_list args;
+    va_start(args, fmt);
+    const auto msg = QString::vasprintf(fmt, args);
+    va_end(args);
+    QMetaObject::invokeMethod(loggerW, &LoggerWidget::logMessage, msg);
+}
 
 static PlayerCore* plcore_inst = nullptr;
 
@@ -1376,7 +1382,7 @@ PlayerCore& PlayerCore::instance() {
     return *plcore_inst;
 }
 
-PlayerCore::PlayerCore(QObject* parent, VideoDisplayWidget* dw): QObject(parent), video_dw(dw){
+PlayerCore::PlayerCore(QObject* parent, VideoDisplayWidget* dw, LoggerWidget* lw): QObject(parent), video_dw(dw), loggerW(lw){
     plcore_inst = this;
 
     connect(this, &PlayerCore::sigReportStreamDuration, this, &PlayerCore::reportStreamDuration);
