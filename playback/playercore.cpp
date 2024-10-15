@@ -310,15 +310,15 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
     }
 
     if (swr_ctx) {
-        const uint8_t * const*in = af.extData();
         const int out_count = swr_get_out_samples(swr_ctx, af.nbSamples());
         if (out_count < 0) {
             av_log(NULL, AV_LOG_ERROR, "swr_get_out_samples() failed\n");
             return adata;
         }
 
-        adata = std::vector<float>(out_count * audio_tgt.ch_layout.nbChannels(), 0.0f);
+        adata.resize(out_count * audio_tgt.ch_layout.nbChannels(), 0.0f);
         auto out = reinterpret_cast<uint8_t*>(adata.data());
+        auto in = af.extData();
         const int len2 = swr_convert(swr_ctx, &out, out_count, in, af.nbSamples());
         if (len2 <= 0) {
             if(len2 < 0)
@@ -377,7 +377,7 @@ static SDL_AudioStream* audio_open(CAVChannelLayout wanted_channel_layout, int w
 }
 
 void audio_render_thread(VideoState* ctx){
-    static constexpr auto audiobuf_preferred_duration = 0.1, audiobuf_empty_duration = 0.01;//in seconds
+    static constexpr auto audiobuf_preferred_duration = 0.1, audiobuf_empty_threshold = 0.01;//in seconds
     static constexpr auto timeout = std::chrono::milliseconds(10);
     static constexpr auto framebuffer_preferred_size = 12; //Try to keep enough CAVFrames worth of data buffered in decoded_frames
 
@@ -391,11 +391,12 @@ void audio_render_thread(VideoState* ctx){
     bool local_paused = false;
     SwrContext *swr_ctx = nullptr;
     std::list<CAVFrame> decoded_frames;
-    bool eos = false, eos_reported = false, flush = false;
+    bool eos = false, eos_reported = false, flush = false, seek_ready = false, force_frame = true;
     float last_volume = 1.0f;
     CAVPacket pkt;
     double last_pts = 0.0, last_duration = 0.0;
     int64_t last_byte_pos = -1;
+    std::vector<float> adata;
 
     auto wait_timeout = []{std::this_thread::sleep_for(timeout);};
 
@@ -415,15 +416,16 @@ void audio_render_thread(VideoState* ctx){
         ctx->flush_athr = false;
         const auto pause_req = ctx->athr_pause_req;
         const bool queue_is_empty = queue.isEmpty();
-        const bool should_fetch_pkt = decoded_frames.size() < framebuffer_preferred_size && !flush_req && !queue_is_empty;
+        const bool fetch_pkt = decoded_frames.size() < framebuffer_preferred_size && !flush_req && !queue_is_empty;
         const float cur_volume = ctx->audio_volume;
-        if(should_fetch_pkt){
+        if(fetch_pkt){
             queue.get(pkt);
         }
         if(last_pts > 0 && !std::isnan(last_pts))
             ctx->last_audio_pts = last_pts + last_duration;
         if(last_byte_pos > 0)
             ctx->last_audio_pos = last_byte_pos;
+        ctx->athr_seek_ready = seek_ready;
         params_lck.unlock();
 
         if(pause_req != local_paused){
@@ -432,13 +434,19 @@ void audio_render_thread(VideoState* ctx){
             ctx->audclk.set_paused(local_paused);
         }
 
+        if(last_volume != cur_volume){
+            last_volume = cur_volume;
+            SDL_SetAudioStreamGain(astream, last_volume);
+        }
+
         if(flush_req){
             decoded_frames.clear();
-            SDL_ClearAudioStream(astream);
-            swr_free(&swr_ctx);
+            if(astream)
+                SDL_ClearAudioStream(astream);
             audio_src = AudioParams();
             dec.flush();
-            eos_reported = false;
+            eos = eos_reported = seek_ready = false;
+            force_frame = true;
             last_pts = last_duration = 0.0;
             last_byte_pos = -1;
             pkt.unref();
@@ -449,49 +457,47 @@ void audio_render_thread(VideoState* ctx){
         if(!pkt.isEmpty() || pkt.isFlush()){
             dec.decodeAudioPacket(pkt, decoded_frames);
             pkt.unref();
-        } else if(decoded_frames.empty()){
-            wait_timeout();
-        }
-
-        eos = dec.eofReached() && decoded_frames.empty() && get_buffered_duration(astream) < audiobuf_empty_duration;
-        if(eos && !eos_reported){
-            ctx->audclk.set_eos(true, last_pts + last_duration);
-            std::scoped_lock dlck(ctx->demux_mutex);
-            ctx->athr_eos = eos_reported = true;
-        }
-
-        if(local_paused || eos){
-            wait_timeout();
-            continue;
-        }
-
-        if(last_volume != cur_volume){
-            last_volume = cur_volume;
-            SDL_SetAudioStreamGain(astream, last_volume);
         }
 
         const auto buffered_duration = get_buffered_duration(astream);
-        if((buffered_duration < audiobuf_preferred_duration) && !decoded_frames.empty()){
-            const auto& af = decoded_frames.front();
-            last_pts = af.ts();
-            last_duration = af.dur();
-            last_byte_pos = af.pktPos();
-            emit playerCore.sigUpdateStreamPos(last_pts);
-            const bool eos_upcoming = dec.eofReached() && decoded_frames.size() == 1;
-            const auto adata = convert_audio_frame(af, audio_src, audio_tgt, swr_ctx, eos_upcoming);
-            decoded_frames.pop_front();
+        eos = dec.eofReached() && decoded_frames.empty() && buffered_duration < audiobuf_empty_threshold;
+        if(eos){
+            seek_ready = true;
+            if(!eos_reported){
+                ctx->audclk.set_eos(true, last_pts + last_duration);
+                std::scoped_lock dlck(ctx->demux_mutex);
+                ctx->athr_eos = eos_reported = true;
+            }
+        }
 
-            if(!adata.empty()){
-                SDL_PutAudioStreamData(astream, adata.data(), adata.size() * sizeof(float));
+        const auto abuffer_hungry = buffered_duration < audiobuf_preferred_duration;
+        const bool wait = (decoded_frames.empty() && queue_is_empty) || !abuffer_hungry || (local_paused && !force_frame) || eos;
+        if(wait){
+            wait_timeout();
+        } else {
+            if(!decoded_frames.empty()){
+                const auto& af = decoded_frames.front();
+                last_pts = af.ts();
+                last_duration = af.dur();
+                last_byte_pos = af.pktPos();
+                const bool eos_upcoming = dec.eofReached() && decoded_frames.size() == 1;
+                adata = convert_audio_frame(af, audio_src, audio_tgt, swr_ctx, eos_upcoming);
+                decoded_frames.pop_front();
+                const auto stream_pos = last_pts - buffered_duration;
+                if (!std::isnan(last_pts)) {
+                    ctx->audclk.set(stream_pos);
+                    emit playerCore.sigUpdateStreamPos(stream_pos);
+                }
+                if(!adata.empty()){
+                    SDL_PutAudioStreamData(astream, adata.data(), adata.size() * sizeof(float));
+                    adata.clear();
+                }
                 if(eos_upcoming){
                     SDL_FlushAudioStream(astream);
                 }
-                if (!isnan(last_pts)) {
-                    ctx->audclk.set(last_pts + last_duration - get_buffered_duration(astream));
-                }
+                seek_ready = true;
+                force_frame = false;
             }
-        } else {
-            wait_timeout();
         }
     }
 
@@ -556,7 +562,7 @@ void video_render_thread(VideoState* ctx){
     bool local_paused = false;
     SwsContext *sub_convert_ctx = nullptr;
     std::list<CAVFrame> decoded_frames;
-    bool eos = false, eos_reported = false, flush = false, update_frame_timer = false, force_frame = true;
+    bool eos = false, eos_reported = false, flush = false, seek_ready = false, update_frame_timer = false, force_frame = true;
     double frame_timer = 0.0, last_pts = 0.0, last_duration = 0.0;
     double remaining_time = 0.0, remaining_time_set_at = 0.0;
 
@@ -587,13 +593,14 @@ void video_render_thread(VideoState* ctx){
             ctx->last_video_pos = last_byte_pos;
         if(last_pts > 0 && !std::isnan(last_pts))
             ctx->last_video_pts = last_pts;
+        ctx->vthr_seek_ready = seek_ready;
         params_lck.unlock();
 
         if(flush_req){
             decoded_frames.clear();
             dec.flush();
             update_frame_timer = force_frame = true;
-            eos = eos_reported = false;
+            eos = eos_reported = seek_ready = false;
             remaining_time = remaining_time_set_at = 0.0;
             last_pts = last_duration = 0.0;
             last_byte_pos = -1;
@@ -610,10 +617,13 @@ void video_render_thread(VideoState* ctx){
         }
 
         eos = decoded_frames.empty() && dec.eofReached();
-        if(eos && !eos_reported){
-            ctx->vidclk.set_eos(true, last_pts);
-            std::scoped_lock dlck(ctx->demux_mutex);
-            ctx->vthr_eos = eos_reported = true;
+        if(eos){
+            seek_ready = true;
+            if(!eos_reported){
+                ctx->vidclk.set_eos(true, last_pts);
+                std::scoped_lock dlck(ctx->demux_mutex);
+                ctx->vthr_eos = eos_reported = true;
+            }
         }
 
         if(pause_req != local_paused){
@@ -621,7 +631,7 @@ void video_render_thread(VideoState* ctx){
             ctx->vidclk.set_paused(local_paused);
         }
 
-        if(local_paused || eos){
+        if((local_paused && !force_frame) || eos){
             wait_timeout();
             continue;
         }
@@ -680,6 +690,7 @@ void video_render_thread(VideoState* ctx){
                 }
             }
             force_frame = false;
+            seek_ready = true;
 
             renderer->pushFrame(std::move(decoded_frames.front()));//Asynchronous double-buffering
             decoded_frames.pop_front();
@@ -941,7 +952,8 @@ static int demux_thread(VideoState* is)
                 auto lck2 = is->audioq.getLocker();
                 if(pause_changed)
                     is->athr_pause_req = is->vthr_pause_req = local_paused;//Forward pause/unpause to the worker threads
-                if(seek_requested){
+                const bool can_seek = (!is->audio_st || is->athr_seek_ready) && (!is->video_st || is->vthr_seek_ready);
+                if(seek_requested && can_seek){
                     auto lck3 = is->subtitleq.getLocker();
                     const auto info = is->seek_info;
                     switch(info.type){
@@ -1021,8 +1033,10 @@ static int demux_thread(VideoState* is)
                     }
                     seek_flags = 0;
                     is->flush_athr = is->flush_vthr = queue_attachments_req = true;
+                    is->vthr_seek_ready = is->athr_seek_ready = false;
                     demux_eof = false;
                 }
+                is->seek_info = SeekInfo();
             }
 
             video_eos = is->video_st && is->vthr_eos;

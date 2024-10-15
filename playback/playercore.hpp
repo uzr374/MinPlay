@@ -30,12 +30,12 @@ struct VideoState final {
     int64_t last_seek_pos = 0, last_seek_rel = 0;
 
     std::thread audio_render_thr;
-    bool flush_athr = false, athr_quit = false, athr_pause_req = false;
+    bool flush_athr = false, athr_seek_ready = false, athr_quit = false, athr_pause_req = false;
     int64_t last_audio_pos = -1;
     double last_audio_pts = 0.0;
 
     std::thread video_render_thr;
-    bool flush_vthr = false, vthr_quit = false, vthr_pause_req = false;
+    bool flush_vthr = false, vthr_seek_ready = false, vthr_quit = false, vthr_pause_req = false;
     int64_t last_video_pos = -1;
     double last_video_pts = 0.0;
 
