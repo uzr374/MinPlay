@@ -33,8 +33,7 @@ static constexpr struct TextureFormatEntry {
     { AV_PIX_FMT_UYVY422,        SDL_PIXELFORMAT_UYVY },
     { AV_PIX_FMT_NV12,           SDL_PIXELFORMAT_NV12 },
     { AV_PIX_FMT_NV21,           SDL_PIXELFORMAT_NV21 },
-    { AV_PIX_FMT_P010,           SDL_PIXELFORMAT_P010 },
-    { AV_PIX_FMT_NONE,           SDL_PIXELFORMAT_UNKNOWN },
+    { AV_PIX_FMT_P010,           SDL_PIXELFORMAT_P010 }
 };
 
 static bool realloc_texture(SDL_Renderer* renderer, SDL_Texture **texture, SDL_PixelFormat new_format,
@@ -194,7 +193,6 @@ SDLRenderer::SDLRenderer(QObject* parent) : QObject(parent), event_timer(this) {
             ++i;
             tex_fmt = tex_fmts[i];
         }
-        supported_avpix_fmts.push_back(AV_PIX_FMT_NONE);
     }
     SDL_ShowWindow(wnd);
     SDL_SyncWindow(wnd);

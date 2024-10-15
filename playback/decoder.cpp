@@ -68,14 +68,13 @@ bool Decoder::eofReached() const{
     return eof_reached;
 }
 
-static constexpr AVColorSpace sdl_supported_color_spaces[] = {
+static constexpr std::array<AVColorSpace, 6> supported_color_spaces = {
     AVCOL_SPC_BT709,
     AVCOL_SPC_BT470BG,
     AVCOL_SPC_SMPTE170M,
     AVCOL_SPC_RGB,
     AVCOL_SPC_BT2020_CL,
     AVCOL_SPC_BT2020_NCL,
-    AVCOL_SPC_UNSPECIFIED,
 };
 
 static inline
@@ -142,7 +141,6 @@ static int configure_video_filters(AVFilterGraph *graph, const char *vfilters,
     auto codecpar = stream.codecPar();
     const auto fr = stream.frameRate();
     const AVDictionaryEntry *e = NULL;
-    int nb_pix_fmts = 0;
     auto par = av_buffersrc_parameters_alloc();
     if (!par)
         return AVERROR(ENOMEM);
@@ -191,9 +189,13 @@ static int configure_video_filters(AVFilterGraph *graph, const char *vfilters,
         goto fail;
     }
 
-    if ((ret = av_opt_set_int_list(filt_out, "pix_fmts", supported_pix_fmts.data(),  AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN)) < 0)
+    if ((ret = av_opt_set_array(filt_out, "pixel_formats", AV_OPT_SEARCH_CHILDREN,
+                                0, supported_pix_fmts.size(), AV_OPT_TYPE_PIXEL_FMT, supported_pix_fmts.data())) < 0)
         goto fail;
-    if ((ret = av_opt_set_int_list(filt_out, "color_spaces", sdl_supported_color_spaces,  AVCOL_SPC_UNSPECIFIED, AV_OPT_SEARCH_CHILDREN)) < 0)
+    /*Do not set the following option for vk renderer*/
+        if((ret = av_opt_set_array(filt_out, "colorspaces", AV_OPT_SEARCH_CHILDREN,
+                                0, supported_color_spaces.size(),
+                                AV_OPT_TYPE_INT, supported_color_spaces.data())) < 0)
         goto fail;
 
     ret = avfilter_init_dict(filt_out, NULL);
@@ -289,8 +291,6 @@ static int configure_audio_filters(const char *afilters, const AudioParams& audi
                                    AVFilterGraph*& agraph, AVFilterContext*& in_audio_filter,
                                    AVFilterContext*& out_audio_filter, const AudioParams& audio_tgt)
 {
-    const AVSampleFormat sample_fmts[2] = { audio_tgt.fmt, AV_SAMPLE_FMT_NONE };
-    const int sample_rates[2] = { audio_tgt.freq, -1 };
     AVFilterContext *filt_asrc = NULL, *filt_asink = NULL;
     char aresample_swr_opts[512]{}, asrc_args[256]{};
     const AVDictionaryEntry *e = NULL;
@@ -329,18 +329,14 @@ static int configure_audio_filters(const char *afilters, const AudioParams& audi
         goto end;
     }
 
-    if ((ret = av_opt_set_int_list(filt_asink, "sample_fmts", sample_fmts,  AV_SAMPLE_FMT_NONE, AV_OPT_SEARCH_CHILDREN)) < 0)
-        goto end;
-    if ((ret = av_opt_set_int(filt_asink, "all_channel_counts", 1, AV_OPT_SEARCH_CHILDREN)) < 0)
+    if ((ret = av_opt_set(filt_asink, "sample_formats", "fltp", AV_OPT_SEARCH_CHILDREN)) < 0)
         goto end;
 
-    av_bprint_clear(&bp);
-    av_channel_layout_describe_bprint(&audio_tgt.ch_layout.constAv(), &bp);
-    if ((ret = av_opt_set_int(filt_asink, "all_channel_counts", 0, AV_OPT_SEARCH_CHILDREN)) < 0)
+    if ((ret = av_opt_set_array(filt_asink, "channel_layouts", AV_OPT_SEARCH_CHILDREN,
+                                0, 1, AV_OPT_TYPE_CHLAYOUT, &audio_tgt.ch_layout.constAv())) < 0)
         goto end;
-    if ((ret = av_opt_set(filt_asink, "ch_layouts", bp.str, AV_OPT_SEARCH_CHILDREN)) < 0)
-        goto end;
-    if ((ret = av_opt_set_int_list(filt_asink, "sample_rates", sample_rates,  -1, AV_OPT_SEARCH_CHILDREN)) < 0)
+    if ((ret = av_opt_set_array(filt_asink, "samplerates", AV_OPT_SEARCH_CHILDREN,
+                                0, 1, AV_OPT_TYPE_INT, &audio_tgt.freq)) < 0)
         goto end;
 
     if ((ret = avfilter_init_dict(filt_asink, NULL)) < 0)
