@@ -65,6 +65,7 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         src/GUI/Slider.hpp src/GUI/Slider.cpp
         src/utils.hpp
         src/utils.cpp
+        src/GUI/AppEventFilter.hpp src/GUI/AppEventFilter.cpp
 
 
     )

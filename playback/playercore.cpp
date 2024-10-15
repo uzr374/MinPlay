@@ -378,7 +378,7 @@ static SDL_AudioStream* audio_open(CAVChannelLayout wanted_channel_layout, int w
 
 void audio_render_thread(VideoState* ctx){
     static constexpr auto audiobuf_preferred_duration = 0.1, audiobuf_empty_threshold = 0.01;//in seconds
-    static constexpr auto timeout = std::chrono::milliseconds(10);
+    static constexpr auto timeout = 0.016;//16 ms sleep timeout
     static constexpr auto framebuffer_preferred_size = 12; //Try to keep enough CAVFrames worth of data buffered in decoded_frames
 
     auto& dec = *ctx->auddec;
@@ -398,7 +398,7 @@ void audio_render_thread(VideoState* ctx){
     int64_t last_byte_pos = -1;
     std::vector<float> adata;
 
-    auto wait_timeout = []{std::this_thread::sleep_for(timeout);};
+    auto wait_timeout = []{Utils::sleep_s(timeout);};
 
     auto get_buffered_duration = [&audio_tgt](SDL_AudioStream* stream){
         const auto bytes_queued = SDL_GetAudioStreamQueued(stream);
@@ -443,10 +443,10 @@ void audio_render_thread(VideoState* ctx){
             decoded_frames.clear();
             if(astream)
                 SDL_ClearAudioStream(astream);
-            audio_src = AudioParams();
+            audio_src = AudioParams();//To reset the resampler
             dec.flush();
             eos = eos_reported = seek_ready = false;
-            force_frame = true;
+            force_frame = true;//To refresh the audio buffer even on pause
             last_pts = last_duration = 0.0;
             last_byte_pos = -1;
             pkt.unref();
@@ -554,7 +554,6 @@ static double vp_duration(const CAVFrame& vp, double last_pts, double last_durat
 }
 
 void video_render_thread(VideoState* ctx){
-    static constexpr auto timeout = std::chrono::milliseconds(10);
     static constexpr auto sleep_threshold = 0.0015; //Wait if the delay is larger than this value, if below - then show the frame
     static constexpr auto framebuffer_preferred_size = 2;//Try to keep 2 CAVFrames worth of data buffered in decoded_frames
     static constexpr auto REFRESH_RATE = 0.01;//Should be less than 1/fps
@@ -575,7 +574,7 @@ void video_render_thread(VideoState* ctx){
     auto renderer = playerCore.sdlRenderer();
     dec.setSupportedPixFmts(renderer->supportedFormats());
 
-    auto wait_timeout = []{std::this_thread::sleep_for(timeout);};
+    auto wait_timeout = []{Utils::sleep_s(REFRESH_RATE);};
 
     while(!quitRequested()){
         auto params_lck = queue.getLocker();
@@ -638,15 +637,14 @@ void video_render_thread(VideoState* ctx){
 
         if(!decoded_frames.empty()) {
             if (update_frame_timer){
-                frame_timer = gettime_s();
+                frame_timer = Utils::gettime_s();
                 update_frame_timer = false;
             } else if(remaining_time_set_at > 0.0){
                 remaining_time = std::min(remaining_time, REFRESH_RATE);
-                const auto actual_remaining_time = remaining_time - (gettime_s() - remaining_time_set_at);
+                const auto actual_remaining_time = remaining_time - (Utils::gettime_s() - remaining_time_set_at);
                 //qDebug() << "True remaining time:  " << true_remaining_time;
                 if(actual_remaining_time > sleep_threshold){
-                    const int to_sleep = actual_remaining_time * 1000;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(to_sleep));
+                    Utils::sleep_s(actual_remaining_time);
                 }
                 remaining_time = remaining_time_set_at = 0.0;
             }
@@ -655,7 +653,7 @@ void video_render_thread(VideoState* ctx){
 
             const auto nom_last_duration = vp_duration(vp, last_pts, last_duration, max_frame_duration);
             const auto delay = compute_target_delay(nom_last_duration, ctx, max_frame_duration);
-            const auto time = gettime_s();
+            const auto time = Utils::gettime_s();
             const auto next_frame_time = frame_timer + delay;
             if (!force_frame && time < next_frame_time) {
                 remaining_time = next_frame_time - time;
@@ -1356,7 +1354,7 @@ void PlayerCore::createSDLRenderer(){
 void PlayerCore::destroySDLRenderer(){
     if(video_renderer){
         QMetaObject::invokeMethod(video_dw, &VideoDisplayWidget::destroySDLRenderer, Qt::QueuedConnection);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));//Wait for the renderer to be destroyed(ugly)
+        Utils::sleep_s(0.05);//Wait for the renderer to be destroyed(ugly)
         video_renderer = nullptr;
     }
 }

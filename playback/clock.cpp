@@ -8,7 +8,7 @@ double Clock::get() const
     if (eos || clock_paused || std::isnan(clock_pts)) {
         return clock_pts;
     } else {
-        const auto time = gettime_s();
+        const auto time = Utils::gettime_s();
         return clock_pts_drift + time - (time - clock_last_updated) * (1.0 - clock_speed);
     }
 }
@@ -37,7 +37,7 @@ void Clock::deactivate()
 void Clock::set_eos(bool eos, double ts){
     std::scoped_lock lck(mutex);
     this->eos = eos;
-    set_at(ts, gettime_s());
+    set_at(ts, Utils::gettime_s());
 }
 
 double Clock::last_upd() const {return clock_last_updated;}
@@ -47,7 +47,7 @@ void Clock::set_paused(bool paused){
     const auto value = get();
     std::unique_lock lck(mutex);
     if(paused){
-        set_at(value, gettime_s());
+        set_at(value, Utils::gettime_s());
     }
     clock_paused = paused;
 }

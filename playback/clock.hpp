@@ -1,22 +1,15 @@
 #ifndef CLOCK_H
 #define CLOCK_H
 
+#include "../src/utils.hpp"
+
 #include <mutex>
-
 #include <QtGlobal>
-
-extern "C"{
-#include <libavutil/time.h>
-}
-
-inline double gettime_s(){
-    return av_gettime_relative() / 1000000.0;
-}
 
 class Clock {
 private:
     double clock_pts = 0.0;           /* clock base */
-    double clock_pts_drift = 0.0;     /* clock base minus time at which we updated the clock */
+    double clock_pts_drift = 0.0;     /* clock base minus time at which we updated the clock */ /*TODO: remove the field*/
     double clock_last_updated = 0.0;
     double clock_speed = 1.0;
     bool clock_paused = false, eos = false;
@@ -32,7 +25,7 @@ public:
     Q_DISABLE_COPY_MOVE(Clock);
 
     double get() const;
-    void set(double pts, double time = gettime_s());
+    void set(double pts, double time = Utils::gettime_s());
     void deactivate();
     double last_upd() const;
     bool is_paused() const;

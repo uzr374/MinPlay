@@ -1,5 +1,10 @@
 #include "utils.hpp"
 
+extern "C"{
+#include <libavutil/time.h>
+#include <libavutil/avutil.h>
+}
+
 #include <QString>
 
 namespace Utils {
@@ -15,5 +20,13 @@ QString posToHMS(double timeS, double durS){
     const auto totalTime = secToHMS(durS);
 
     return QString("%1/%2").arg(currentTime, totalTime);
+}
+
+double gettime_s(){
+    return av_gettime_relative() / double(AV_TIME_BASE);
+}
+
+void sleep_s(double sec){
+    av_usleep(sec * AV_TIME_BASE);
 }
 }

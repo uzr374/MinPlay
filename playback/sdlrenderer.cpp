@@ -1,10 +1,12 @@
 #include "sdlrenderer.hpp"
+#include "cavframe.h"
+#include "sdlkeymap.hpp"
 
 #include <QWindow>
-#include <QCoreApplication>
+#include <QKeyEvent>
+#include <QApplication>
+#include <QTimer>
 #include <stdexcept>
-
-#include "cavframe.h"
 
 static constexpr struct TextureFormatEntry {
     AVPixelFormat format;
@@ -247,6 +249,20 @@ void SDLRenderer::handleSDLEvents() {
 void SDLRenderer::processSDLEvent(const SDL_Event& evt){
     switch(evt.type){
     case SDL_EVENT_KEY_DOWN:
+    {
+        const auto qtKey = toQtKey(evt.key.key);
+        if(qtKey != Qt::Key_unknown){
+            QApplication::postEvent(QApplication::instance(), new QKeyEvent(QEvent::KeyPress, qtKey, Qt::NoModifier));
+        }
+    }
+        break;
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    {
+        SDL_ShowCursor();
+        QTimer::singleShot(900, []{SDL_HideCursor();});
+    }
         break;
     case SDL_EVENT_WINDOW_SHOWN:
     case SDL_EVENT_WINDOW_EXPOSED:

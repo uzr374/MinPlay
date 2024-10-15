@@ -5,10 +5,12 @@
 #include "src/GUI/videodisplaywidget.hpp"
 #include "src/GUI/ToolBar.hpp"
 #include "src/GUI/StatusBar.hpp"
+#include "src/GUI/AppEventFilter.hpp"
 
 #include <QScreen>
 #include <QDebug>
 #include <QCloseEvent>
+#include <QApplication>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -33,6 +35,8 @@ MainWindow::MainWindow(QWidget *parent)
     addDockWidget(Qt::LeftDockWidgetArea, vDock);
 
     core = new PlayerCore(this, vWidget);
+    auto app_evt_filter = new AppEventFilter(this);
+    QApplication::instance()->installEventFilter(app_evt_filter);
 
     setGeometry(getDefaultWindowGeometry(this->screen()));
 
