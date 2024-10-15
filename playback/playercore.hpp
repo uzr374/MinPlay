@@ -10,6 +10,7 @@
 
 #include <thread>
 #include <condition_variable>
+#include <QUrl>
 
 struct SeekInfo {
     enum SeekType{
@@ -92,7 +93,7 @@ public:
    void log(const char* fmt, ...);
 
    public slots:
-        void openURL(QString url);
+        void openURL(QUrl url);
         void stopPlayback();
         void pausePlayback();
         void resumePlayback();

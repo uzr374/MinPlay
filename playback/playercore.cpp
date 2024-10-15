@@ -1295,12 +1295,18 @@ static void set_playback_paused(VideoState* ctx, bool paused){
     ctx->pause_req = paused;
 }
 
-void PlayerCore::openURL(QString url){
+void PlayerCore::openURL(QUrl url){
     if(is_active()){
         stopPlayback();
     }
     player_ctx = std::make_unique<VideoState>();
-    player_ctx->url = url.toStdString();
+    std::string str_url;
+    if(url.isLocalFile()){
+        str_url = url.path().toStdString();
+    } else{
+        str_url = url.url().toStdString();
+    }
+    player_ctx->url = str_url;
     player_ctx->demux_thr = std::thread(demux_thread, player_ctx.get());
 }
 

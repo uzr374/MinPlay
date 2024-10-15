@@ -7,6 +7,7 @@
 #include "src/GUI/StatusBar.hpp"
 #include "src/GUI/AppEventFilter.hpp"
 #include "src/GUI/LoggerWidget.h"
+#include "src/GUI/Playlist.hpp"
 
 #include <QScreen>
 #include <QDebug>
@@ -40,6 +41,11 @@ MainWindow::MainWindow(QWidget *parent)
     loggerDock->setWidget(logger);
     addDockWidget(Qt::RightDockWidgetArea, loggerDock);
 
+    auto plDock = new CDockWidget(this);
+    auto plList = new Playlist();
+    plDock->setWidget(plList);
+    addDockWidget(Qt::RightDockWidgetArea, plDock);
+
     core = new PlayerCore(this, vWidget, logger);
     auto app_evt_filter = new AppEventFilter(this);
     QApplication::instance()->installEventFilter(app_evt_filter);
@@ -54,6 +60,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(core, &PlayerCore::updatePlaybackPos, sBar, &StatusBar::updatePlaybackPos);
     connect(core, &PlayerCore::setControlsActive, tBar, &ToolBar::setActive);
     connect(core, &PlayerCore::setControlsActive, sBar, &StatusBar::setActive);
+    connect(m_menus, &MenuBarMenu::submitURLs, plList, &Playlist::appendURLs);
+    connect(plList, &Playlist::openURL, core, &PlayerCore::openURL);
 }
 
 MainWindow::~MainWindow() {
