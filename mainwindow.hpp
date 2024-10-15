@@ -3,6 +3,7 @@
 
 #include "src/GUI/MenuBarMenu.hpp"
 #include "playback/playercore.hpp"
+#include "src/utils.hpp"
 
 #include <QMainWindow>
 
@@ -10,6 +11,7 @@ class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
+    const QString settingsUrl = Utils::getApplicationDir() + "/settings/mainwindow.state";
 private:
     QWidget* priv_centralWidget = nullptr;
     MenuBarMenu* m_menus = nullptr;

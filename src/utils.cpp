@@ -6,6 +6,7 @@ extern "C"{
 }
 
 #include <QString>
+#include <QApplication>
 
 namespace Utils {
 QString secToHMS(double seconds){
@@ -28,5 +29,9 @@ double gettime_s(){
 
 void sleep_s(double sec){
     av_usleep(sec * AV_TIME_BASE);
+}
+
+QString getApplicationDir(){
+    return QApplication::applicationDirPath();
 }
 }

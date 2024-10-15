@@ -13,6 +13,7 @@
 #include <QDebug>
 #include <QCloseEvent>
 #include <QApplication>
+#include <QSettings>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -33,15 +34,20 @@ MainWindow::MainWindow(QWidget *parent)
     setStatusBar(sBar);
 
     auto vDock = new VideoDock(this);
+    vDock->setObjectName("videoDock");
     auto vWidget = static_cast<VideoDisplayWidget*>(vDock->widget());
     addDockWidget(Qt::LeftDockWidgetArea, vDock);
 
     auto loggerDock = new CDockWidget(this);
+    loggerDock->setObjectName("loggerDock");
+    loggerDock->setWindowTitle("Logger");
     auto logger = new LoggerWidget();
     loggerDock->setWidget(logger);
     addDockWidget(Qt::RightDockWidgetArea, loggerDock);
 
     auto plDock = new CDockWidget(this);
+    plDock->setObjectName("playlistDock");
+    plDock->setWindowTitle("Playlist");
     auto plList = new Playlist();
     plDock->setWidget(plList);
     addDockWidget(Qt::RightDockWidgetArea, plDock);
@@ -51,6 +57,12 @@ MainWindow::MainWindow(QWidget *parent)
     QApplication::instance()->installEventFilter(app_evt_filter);
 
     setGeometry(getDefaultWindowGeometry(this->screen()));
+
+    QSettings sets(settingsUrl);
+    const auto saved_state = sets.value("windowState", QByteArray()).toByteArray();
+    if(!saved_state.isEmpty()){
+        restoreState(saved_state);
+    }
 
     connect(m_menus, &MenuBarMenu::stopPlayback, core, &PlayerCore::stopPlayback);
     connect(m_menus, &MenuBarMenu::pausePlayback, core, &PlayerCore::pausePlayback);
@@ -65,7 +77,8 @@ MainWindow::MainWindow(QWidget *parent)
 }
 
 MainWindow::~MainWindow() {
-    core->stopPlayback();
+    QSettings sets(settingsUrl);
+    sets.setValue("windowState", saveState());
 }
 
 QRect MainWindow::getDefaultWindowGeometry(QScreen* container){

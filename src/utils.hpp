@@ -8,6 +8,7 @@ QString secToHMS(double timeS);
 QString posToHMS(double timeS, double durS);
 double gettime_s();
 void sleep_s(double sec);
+QString getApplicationDir();
 }
 
 #endif
