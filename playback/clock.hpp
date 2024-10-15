@@ -8,8 +8,7 @@
 
 class Clock {
 private:
-    double clock_pts = 0.0;           /* clock base */
-    double clock_pts_drift = 0.0;     /* clock base minus time at which we updated the clock */ /*TODO: remove the field*/
+    double clock_pts = 0.0;
     double clock_last_updated = 0.0;
     double clock_speed = 1.0;
     bool clock_paused = false, eos = false;

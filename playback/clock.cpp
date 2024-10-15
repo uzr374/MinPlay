@@ -9,7 +9,8 @@ double Clock::get() const
         return clock_pts;
     } else {
         const auto time = Utils::gettime_s();
-        return clock_pts_drift + time - (time - clock_last_updated) * (1.0 - clock_speed);
+        const auto time_drift = time - clock_last_updated;
+        return clock_pts + time_drift * clock_speed;
     }
 }
 
@@ -17,7 +18,6 @@ void Clock::set_at(double pts, double time)
 {
     clock_pts = pts;
     clock_last_updated = time;
-    clock_pts_drift = pts - time;
 }
 
 void Clock::set(double pts, double time)
