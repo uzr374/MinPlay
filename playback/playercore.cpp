@@ -416,11 +416,10 @@ void audio_render_thread(VideoState* ctx){
         const auto buffered_duration = get_buffered_duration(astream);
         eos = dec.eofReached() && decoded_frames.empty() && buffered_duration < audiobuf_empty_threshold;
         if(eos){
-            seek_ready = true;
             if(!eos_reported){
                 ctx->audclk.set_eos(true, last_pts + last_duration);
                 std::scoped_lock dlck(ctx->demux_mutex);
-                ctx->athr_eos = eos_reported = true;
+                ctx->athr_eos = eos_reported = seek_ready = true;
             }
         }
 
@@ -496,8 +495,8 @@ static double compute_target_delay(double delay, VideoState *ctx, double max_dur
     return delay;
 }
 
-static double vp_duration(const CAVFrame& vp, double last_pts, double last_duration, double max_duration) {
-    const double duration = vp.ts() - last_pts;
+static double vp_duration(double next_pts, double last_pts, double last_duration, double max_duration) {
+    const double duration = next_pts - last_pts;
     if (isnan(duration) || duration <= 0 || duration > max_duration)
         return last_duration;
     else
@@ -568,11 +567,10 @@ void video_render_thread(VideoState* ctx){
 
         eos = decoded_frames.empty() && dec.eofReached();
         if(eos){
-            seek_ready = true;
             if(!eos_reported){
                 ctx->vidclk.set_eos(true, last_pts);
                 std::scoped_lock dlck(ctx->demux_mutex);
-                ctx->vthr_eos = eos_reported = true;
+                ctx->vthr_eos = eos_reported = seek_ready = true;
             }
         }
 
@@ -602,7 +600,7 @@ void video_render_thread(VideoState* ctx){
 
             auto& vp = decoded_frames.front();
 
-            const auto nom_last_duration = vp_duration(vp, last_pts, last_duration, max_frame_duration);
+            const auto nom_last_duration = vp_duration(vp.ts(), last_pts, last_duration, max_frame_duration);
             const auto delay = compute_target_delay(nom_last_duration, ctx, max_frame_duration);
             const auto time = Utils::gettime_s();
             const auto next_frame_time = frame_timer + delay;
@@ -629,7 +627,7 @@ void video_render_thread(VideoState* ctx){
 
                 if (decoded_frames.size() > 1) { //Framedrop lookahead
                     auto& nextvp = *(++decoded_frames.begin());
-                    const auto duration = vp_duration(nextvp, last_pts, last_duration, max_frame_duration);
+                    const auto duration = vp_duration(nextvp.ts(), last_pts, last_duration, max_frame_duration);
                     if(time > frame_timer + duration){
                         decoded_frames.pop_front();
                         decoded_frames.pop_front();
