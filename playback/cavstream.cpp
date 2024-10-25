@@ -1,5 +1,7 @@
 #include "cavstream.hpp"
 
+#include <stdexcept>
+
 CAVStream::CAVStream(): codecpar(avcodec_parameters_alloc()) {
 
 }
@@ -8,7 +10,13 @@ CAVStream::~CAVStream(){
     avcodec_parameters_free(&codecpar);
 }
 
-CAVStream::CAVStream(AVFormatContext* ctx, AVStream* st): CAVStream(){
+CAVStream::CAVStream(AVFormatContext* ctx, int stream_index): CAVStream(){
+    if (stream_index < 0 || stream_index >= ctx->nb_streams) {
+        avcodec_parameters_free(&codecpar);
+        throw std::runtime_error("CAVStream:: index out of range");
+    }
+    const auto st = ctx->streams[stream_index];
+    index = stream_index;
     avcodec_parameters_copy(codecpar, st->codecpar);
     if(isVideo()){
         is_attached_pic = (st->disposition & AV_DISPOSITION_ATTACHED_PIC);
@@ -52,6 +60,7 @@ void CAVStream::clear(){
     is_attached_pic = false;
     start_time = AV_NOPTS_VALUE;
     stream_duration = AV_NOPTS_VALUE;
+    index = -1;
 }
 
 void CAVStream::copyFrom(const CAVStream& rhs){
@@ -62,6 +71,7 @@ void CAVStream::copyFrom(const CAVStream& rhs){
     is_attached_pic = rhs.isAttachedPic();
     start_time = rhs.startTime();
     stream_duration = rhs.duration();
+    index = rhs.idx();
 }
 
 const AVCodec* CAVStream::getCodec() const{
@@ -83,3 +93,4 @@ bool CAVStream::isSub() const{return type() == AVMEDIA_TYPE_SUBTITLE;}
 AVMediaType CAVStream::type() const{return codecPar().codec_type;}
 int64_t CAVStream::startTime() const {return start_time;}
 int64_t CAVStream::duration() const{return stream_duration;}
+int CAVStream::idx() const{return index;}

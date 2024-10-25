@@ -7,21 +7,11 @@
 #include "clock.hpp"
 #include "decoder.hpp"
 #include "sdlrenderer.hpp"
+#include "formatcontext.hpp"
 
 #include <thread>
 #include <condition_variable>
 #include <QUrl>
-
-struct SeekInfo {
-    enum SeekType{
-        SEEK_NONE, SEEK_PERCENT, SEEK_INCREMENT, SEEK_CHAPTER
-    };
-
-    SeekType type = SEEK_NONE;
-    double percent = 0.0, increment = 0.0;
-    int chapter_incr = 0;
-};
-
 
 struct VideoState final {
     std::thread demux_thr;
@@ -32,12 +22,16 @@ struct VideoState final {
     int64_t last_seek_pos = 0, last_seek_rel = 0;
 
     std::thread audio_render_thr;
-    bool flush_athr = false, athr_seek_ready = false, athr_quit = false, athr_pause_req = false;
+    bool flush_athr = false, athr_seek_ready = false, athr_quit = false, athr_pause_req = false,
+        has_astream = false, athr_params_modified = false;
+    PacketQueue audioq;
     int64_t last_audio_pos = -1;
     double last_audio_pts = 0.0;
 
     std::thread video_render_thr;
-    bool flush_vthr = false, vthr_seek_ready = false, vthr_quit = false, vthr_pause_req = false;
+    bool flush_vthr = false, vthr_seek_ready = false, vthr_quit = false, vthr_pause_req = false,
+        has_vstream = false, has_sub_stream = false, vthr_params_modified = false;
+    PacketQueue videoq, subtitleq;
     int64_t last_video_pos = -1;
     double last_video_pts = 0.0;
 
@@ -45,24 +39,11 @@ struct VideoState final {
 
     std::unique_ptr<Decoder> auddec, viddec, subdec;
 
-    int audio_stream = -1;
-    AVStream *audio_st = nullptr;
-    PacketQueue audioq;
-
     float audio_volume = 1.0f;
 
-    int subtitle_stream = -1;
-    AVStream *subtitle_st = nullptr;
-    PacketQueue subtitleq;
+    double max_frame_duration = 0.0;// maximum duration of a frame - above this, we consider the jump a timestamp discontinuity
 
-    int video_stream = -1;
-    AVStream *video_st = nullptr;
-    PacketQueue videoq;
-    double max_frame_duration = 0.0;      // maximum duration of a frame - above this, we consider the jump a timestamp discontinuity
-
-    std::string url;
-
-    int last_video_stream = -1, last_audio_stream = -1, last_subtitle_stream = -1;
+    QString url;
 };
 
 class PlayerCore final : public QObject

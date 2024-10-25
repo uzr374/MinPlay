@@ -14,12 +14,13 @@ class CAVStream final
     bool is_attached_pic = false;
     int64_t start_time = AV_NOPTS_VALUE;
     int64_t stream_duration = AV_NOPTS_VALUE;
+    int index = -1;// In AVFormatContext
 
     void copyFrom(const CAVStream& rhs);
 
 public:
     CAVStream();
-    CAVStream(AVFormatContext* ctx, AVStream* st);
+    CAVStream(AVFormatContext* ctx, int stream_index);
     ~CAVStream();
     CAVStream(const CAVStream& rhs);
     CAVStream(CAVStream&& rhs);
@@ -40,6 +41,7 @@ public:
     AVMediaType type() const;
     int64_t startTime() const;
     int64_t duration() const;
+    int idx() const;
 };
 
 #endif // CAVSTREAM_HPP

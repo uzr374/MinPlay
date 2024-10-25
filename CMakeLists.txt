@@ -68,6 +68,8 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         src/GUI/AppEventFilter.hpp src/GUI/AppEventFilter.cpp
         src/GUI/LoggerWidget.h src/GUI/LoggerWidget.cpp
         src/GUI/Playlist.hpp src/GUI/Playlist.cpp
+        src/GUI/InfoWidget.h src/GUI/InfoWidget.cpp
+        playback/formatcontext.hpp playback/formatcontext.cpp
 
 
     )
