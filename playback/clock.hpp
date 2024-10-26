@@ -14,9 +14,6 @@ private:
     bool clock_paused = false, eos = false;
     mutable std::mutex mutex;
 
-private:
-    void set_at(double pts, double time);
-
 public:
     Clock() = default;
     ~Clock() = default;
@@ -25,6 +22,8 @@ public:
 
     double get() const;
     void set(double pts, double time = Utils::gettime_s());
+    double get_nolock() const;
+    void set_nolock(double pts, double time = Utils::gettime_s());
     void deactivate();
     double last_upd() const;
     bool is_paused() const;
