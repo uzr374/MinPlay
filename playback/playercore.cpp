@@ -473,12 +473,11 @@ void audio_render_thread(VideoState* ctx){
 /* no AV correction is done if too big error */
 #define AV_NOSYNC_THRESHOLD 10.0
 
-static double compute_target_delay(double delay, VideoState *ctx, double max_duration)
+static double compute_target_delay(double delay, double diff, double max_duration)
 {
     /* update delay to follow leading synchronisation source */
     /* if video is not lead, we try to correct big delays by
            duplicating or deleting a frame */
-    const double diff = ctx->vidclk.get() - ctx->audclk.get();
     /* skip or repeat frame. We take into account the
            delay to compute the threshold. I still don't know
            if it is the best guess */
@@ -511,6 +510,8 @@ void video_render_thread(VideoState* ctx){
 
     CAVPacket pkt;
     int64_t last_byte_pos = -1;
+
+    Clock vidclk;
 
     auto& queue = ctx->videoq;
     Decoder& dec = *ctx->viddec;
@@ -554,7 +555,7 @@ void video_render_thread(VideoState* ctx){
             frame_timer = invalid_time_val;
             last_byte_pos = -1;
             pkt.unref();
-            ctx->vidclk.set_eos(false, NAN);
+            vidclk.set_eos(false, NAN);
             continue;//To fetch a fresh packet and proceed with decoding
         }
 
@@ -567,7 +568,7 @@ void video_render_thread(VideoState* ctx){
 
         if(pause_req != local_paused){
             local_paused = pause_req;
-            ctx->vidclk.set_paused(local_paused);
+            vidclk.set_paused(local_paused);
         }
 
         if(local_paused && !force_frame){
@@ -578,7 +579,7 @@ void video_render_thread(VideoState* ctx){
         if(decoded_frames.empty()){
             if(dec.eofReached()){
                 if(!eos_reported){
-                    ctx->vidclk.set_eos(true, last_pts);
+                    vidclk.set_eos(true, last_pts);
                     eos_reported = seek_ready = true;
                     std::scoped_lock dlck(ctx->demux_mutex);
                     ctx->vthr_eos = true;
@@ -592,7 +593,7 @@ void video_render_thread(VideoState* ctx){
 
             auto& vp = decoded_frames.front();
             const auto nom_last_duration = vp_duration(vp.ts(), last_pts, last_duration, max_frame_duration);
-            const auto delay = has_audio_st ? compute_target_delay(nom_last_duration, ctx, max_frame_duration) : nom_last_duration;
+            const auto delay = has_audio_st ? compute_target_delay(nom_last_duration, vidclk.get_nolock() - ctx->audclk.get(), max_frame_duration) : nom_last_duration;
             const auto next_frame_time = frame_timer + delay;
             const auto actual_remaining_time = next_frame_time - time;
 
@@ -632,7 +633,7 @@ void video_render_thread(VideoState* ctx){
             decoded_frames.pop_front();
 
             if (!isnan(last_pts)) {
-                ctx->vidclk.set(last_pts, time);
+                vidclk.set_nolock(last_pts, time);
                 emit playerCore.sigUpdateStreamPos(last_pts);
             }
 

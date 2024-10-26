@@ -35,7 +35,7 @@ struct VideoState final {
     int64_t last_video_pos = -1;
     double last_video_pts = 0.0;
 
-    Clock audclk, vidclk;
+    Clock audclk;
 
     std::unique_ptr<Decoder> auddec, viddec, subdec;
 
