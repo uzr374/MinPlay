@@ -15,7 +15,6 @@ bool PacketQueue::put_nullpacket()
 {
     CAVPacket pkt;
     pkt.setFlush(true);
-    auto lck = getLocker();
     return put(std::move(pkt));
 }
 

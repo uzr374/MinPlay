@@ -391,7 +391,6 @@ bool Decoder::filterAudioFrame(CAVFrame& src, std::list<CAVFrame>& filtered){
             break;
         } else{
             AVFrame* frame = buf.av();
-            //qDebug() << "Received an audio frame, nb_samples=" << frame->nb_samples;
             FrameData *fd = frame->opaque_ref ? (FrameData*)frame->opaque_ref->data : NULL;
             const auto tb = av_buffersink_get_time_base(out_filter);
             const double pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
@@ -464,7 +463,11 @@ bool Decoder::filterVideoFrame(CAVFrame& src, std::list<CAVFrame>& filtered){
 }
 
 bool Decoder::decodeVideoPacket(CAVPacket& src, std::list<CAVFrame>& decoded){
+    if(!src.isFlush()){
     preparePacket(src);
+    } else{
+        eof_reached = true;
+    }
     const auto sendRes = avcodec_send_packet(avctx, src.isFlush() ? nullptr : src.constAv());
     if(sendRes < 0) return false;
     int recRes = 0;
@@ -484,7 +487,11 @@ bool Decoder::decodeVideoPacket(CAVPacket& src, std::list<CAVFrame>& decoded){
 }
 
 bool Decoder::decodeAudioPacket(CAVPacket& src, std::list<CAVFrame>& decoded){
-    preparePacket(src);
+    if(!src.isFlush()){
+        preparePacket(src);
+    } else{
+        eof_reached = true;
+    }
     const auto sendRes = avcodec_send_packet(avctx, src.isFlush() ? nullptr : src.constAv());
     if(sendRes < 0) return false;
     int recRes = 0;

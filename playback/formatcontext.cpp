@@ -159,7 +159,7 @@ bool FormatContext::seek(const SeekInfo& info, double last_pts, int64_t last_pos
 int FormatContext::read(CAVPacket& into){
     const auto readRes = av_read_frame(ic, into.av());
     if (readRes < 0) {
-        if ((readRes == AVERROR_EOF || avio_feof(ic->pb)) && !eof) {
+        if ((readRes == AVERROR_EOF) || ic->pb && avio_feof(ic->pb)) {
             eof = true;
             return AVERROR_EOF;
         }

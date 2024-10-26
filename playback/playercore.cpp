@@ -591,7 +591,6 @@ void video_render_thread(VideoState* ctx){
             } else if(remaining_time_set_at > 0.0){
                 remaining_time = std::min(remaining_time, REFRESH_RATE);
                 const auto actual_remaining_time = remaining_time - (Utils::gettime_s() - remaining_time_set_at);
-                //qDebug() << "True remaining time:  " << true_remaining_time;
                 if(actual_remaining_time > sleep_threshold){
                     Utils::sleep_s(actual_remaining_time);
                 }
@@ -631,7 +630,6 @@ void video_render_thread(VideoState* ctx){
                     if(time > frame_timer + duration){
                         decoded_frames.pop_front();
                         decoded_frames.pop_front();
-                        qDebug() << "Dropping frames";
                         continue;
                     }
                 }
@@ -684,14 +682,12 @@ void video_render_thread(VideoState* ctx){
 static bool stream_component_open(VideoState *is, FormatContext& ic, int stream_index)
 {
     if (stream_index < 0 || stream_index >= ic.streamCount())
-        return -1;
+        return false;
 
     auto st = ic.streams().at(stream_index);
 
     switch (st.type()) {
     case AVMEDIA_TYPE_AUDIO:
-        //is->last_audio_stream = stream_index;
-
         try{
             is->auddec = std::make_unique<Decoder>(st);
         } catch(...){
@@ -709,17 +705,15 @@ static bool stream_component_open(VideoState *is, FormatContext& ic, int stream_
 
         break;
     case AVMEDIA_TYPE_VIDEO:
-        //is->last_video_stream = stream_index;
         try{
             is->viddec = std::make_unique<Decoder>(st);
         } catch(...){
             is->viddec = nullptr;
-            return -1;
+            return false;
         }
 
         ic.setStreamEnabled(stream_index, true);
         {
-            auto lck = is->videoq.getLocker();
             is->has_vstream = true;
         }
 
@@ -817,7 +811,7 @@ static bool check_buffer_fullness(const AVStream *astream, PacketQueue& aq,
 static int demux_thread(VideoState* is)
 {
     bool local_paused = false, queue_attachments_req = false, critical_error = false;
-    bool video_eos = false, audio_eos = false, eos = false;
+    bool video_eos = false, audio_eos = false, eos = false, wait_timeout = false;
     std::unique_ptr<FormatContext> fmt_ctx;
 
     try{
@@ -829,11 +823,6 @@ static int demux_thread(VideoState* is)
         playerCore.log("FormatContext: unknown error while initializing");
         critical_error = true;
     }
-
-    auto wait_timeout = [is]{
-        std::unique_lock lck(is->demux_mutex);
-        is->continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
-    };
 
     is->max_frame_duration = fmt_ctx->maxFrameDuration();
 
@@ -857,11 +846,12 @@ static int demux_thread(VideoState* is)
 
     while (!quitRequested() && !critical_error) {
         {
-            std::scoped_lock lck(is->demux_mutex);
+            std::unique_lock lck(is->demux_mutex);
             const bool pause_changed = (is->pause_req != local_paused);
             const bool seek_requested = is->seek_req;
             is->seek_req = false;
             if (pause_changed || seek_requested) {
+                wait_timeout = false;
                 if(pause_changed){
                     local_paused = !local_paused;
                     fmt_ctx->setPaused(local_paused);
@@ -900,48 +890,55 @@ static int demux_thread(VideoState* is)
                 is->seek_info = SeekInfo();
             }
 
+            if(wait_timeout){
+                wait_timeout = false;
+                is->continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
+            }
+
             video_eos = is->has_vstream && is->vthr_eos;
             audio_eos = is->has_astream && is->athr_eos;
         }
 
-        if (!fmt_ctx->isRealtime() && check_buffer_fullness(is->has_astream ?
+        if (!eos && !fmt_ctx->isRealtime() && check_buffer_fullness(is->has_astream ?
             fmt_ctx->av()->streams[fmt_ctx->audioStIdx()] : nullptr, is->audioq,
                 is->has_vstream ? fmt_ctx->av()->streams[fmt_ctx->videoStIdx()] : nullptr, is->videoq)) {
-            wait_timeout();
+            wait_timeout = true;
             continue;
         }
 
-        if (!local_paused && fmt_ctx->eofReached() && video_eos && audio_eos) {
-            /*if (loop != 1 && (!loop || --loop)) {
-                stream_seek(is, 0, 0, 0);
-            } else if (autoexit) {
-                ret = AVERROR_EOF;
-                goto fail;
-            }*/
-        }
-
-        if (queue_attachments_req) {
-            queue_attachments_req = false;
-            if (is->has_vstream && fmt_ctx->streams().at(fmt_ctx->videoStIdx()).isAttachedPic()) {
-                CAVPacket pkt;
-                if (av_packet_ref(pkt.av(), &fmt_ctx->av()->streams[fmt_ctx->videoStIdx()]->attached_pic) == 0){
-                    is->videoq.put(std::move(pkt));
-                    is->videoq.put_nullpacket();
-                }
-            }
+        if (!local_paused && eos && video_eos && audio_eos) {
+            wait_timeout = true;
+            continue;
+        //     /*if (loop != 1 && (!loop || --loop)) {
+        //         stream_seek(is, 0, 0, 0);
+        //     } else if (autoexit) {
+        //         ret = AVERROR_EOF;
+        //         goto fail;
+        //     }*/
         }
 
         if (local_paused && fmt_ctx->isRTSPorMMSH()) {
             /* wait 10 ms to avoid trying to get another packet */
             /* XXX: horrible */
-            wait_timeout();
+            wait_timeout = true;
             continue;
         }
 
         CAVPacket cpkt;
+        if (queue_attachments_req) {
+            queue_attachments_req = false;
+            if (is->has_vstream && fmt_ctx->streams().at(fmt_ctx->videoStIdx()).isAttachedPic()) {
+                if (av_packet_ref(cpkt.av(), &fmt_ctx->av()->streams[fmt_ctx->videoStIdx()]->attached_pic) == 0){
+                    is->videoq.put(std::move(cpkt));
+                    is->videoq.put_nullpacket();
+                }
+                continue;
+            }
+        }
+
         const auto readRes = fmt_ctx->read(cpkt);
         if (readRes < 0) {
-            if (readRes == AVERROR_EOF) {
+            if ((readRes == AVERROR_EOF) && !eos) {
                 eos = true;
                 if (is->has_vstream)
                     is->videoq.put_nullpacket();
@@ -950,9 +947,10 @@ static int demux_thread(VideoState* is)
                 if (is->has_sub_stream)
                     is->subtitleq.put_nullpacket();
             } else if (readRes == AVERROR_EXIT) {
+                playerCore.log("Demuxer: critical error");
                 break;
             }
-            wait_timeout();
+            wait_timeout = true;
         } else {
             eos = false;
             auto pkt = cpkt.av();
