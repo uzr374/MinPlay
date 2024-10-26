@@ -555,7 +555,7 @@ void video_render_thread(VideoState* ctx){
             last_byte_pos = -1;
             pkt.unref();
             ctx->vidclk.set_eos(false, NAN);
-            continue;
+            continue;//To fetch a fresh packet and proceed with decoding
         }
 
         if(!pkt.isEmpty() || pkt.isFlush()){
@@ -583,7 +583,7 @@ void video_render_thread(VideoState* ctx){
                     std::scoped_lock dlck(ctx->demux_mutex);
                     ctx->vthr_eos = true;
                 }
-                 wait_timeout();
+                wait_timeout();
             }
         } else{
             const auto time = Utils::gettime_s();
