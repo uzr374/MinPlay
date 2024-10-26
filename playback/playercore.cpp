@@ -495,25 +495,19 @@ static double compute_target_delay(double delay, VideoState *ctx, double max_dur
     return delay;
 }
 
-static double vp_duration(double next_pts, double last_pts, double last_duration, double max_duration) {
-    const double duration = next_pts - last_pts;
-    if (isnan(duration) || duration <= 0 || duration > max_duration)
-        return last_duration;
-    else
-        return duration;
-}
-
 void video_render_thread(VideoState* ctx){
-    static constexpr auto sleep_threshold = 0.0015; //Wait if the delay is larger than this value, if below - then show the frame
+    static constexpr auto sleep_threshold = 0.001; //Wait if the delay is larger than this value, if below - then show the frame
     static constexpr auto framebuffer_preferred_size = 2;//Try to keep 2 CAVFrames worth of data buffered in decoded_frames
-    static constexpr auto REFRESH_RATE = 0.01;//Should be less than 1/fps
+    static constexpr auto MAX_SLEEP_DURATION = 1.0/30;//Check for events at least this often
+    static constexpr auto invalid_time_val = -1.0;
+
     const double max_frame_duration = ctx->max_frame_duration;
     bool local_paused = false;
     SwsContext *sub_convert_ctx = nullptr;
     std::list<CAVFrame> decoded_frames;
-    bool eos = false, eos_reported = false, flush = false, seek_ready = false, update_frame_timer = false, force_frame = true;
-    double frame_timer = 0.0, last_pts = 0.0, last_duration = 0.0;
-    double remaining_time = 0.0, remaining_time_set_at = 0.0;
+    bool eos_reported = false, flush = false, seek_ready = false, has_audio_st = false, force_frame = true;
+    double frame_timer = 0.0;//The time at which the current frame(the one at the front of the queue) should be presented
+    double last_pts = 0.0, last_duration = 0.0;
 
     CAVPacket pkt;
     int64_t last_byte_pos = -1;
@@ -524,7 +518,13 @@ void video_render_thread(VideoState* ctx){
     auto renderer = playerCore.sdlRenderer();
     dec.setSupportedPixFmts(renderer->supportedFormats());
 
-    auto wait_timeout = []{Utils::sleep_s(REFRESH_RATE);};
+    auto wait_timeout = []{Utils::sleep_s(MAX_SLEEP_DURATION);};
+
+    auto vp_duration = [](double next_pts, double last_pts, double last_duration, double max_duration) {
+        const double duration = next_pts - last_pts;
+        const bool use_last_duration = std::isnan(duration) || duration <= 0 || duration > max_duration;
+        return use_last_duration ? last_duration : duration;
+    };
 
     while(!quitRequested()){
         auto params_lck = queue.getLocker();
@@ -534,7 +534,7 @@ void video_render_thread(VideoState* ctx){
         ctx->flush_vthr = false;
         const bool pause_req = ctx->vthr_pause_req;
         const bool queue_is_empty = queue.isEmpty();
-        const bool should_fetch_pkt = decoded_frames.size() < framebuffer_preferred_size && !flush_req && !queue_is_empty;
+        const bool should_fetch_pkt = (decoded_frames.size() < framebuffer_preferred_size) && !flush_req && !queue_is_empty;
         if(should_fetch_pkt){
             queue.get(pkt);
         }
@@ -543,15 +543,15 @@ void video_render_thread(VideoState* ctx){
         if(last_pts > 0 && !std::isnan(last_pts))
             ctx->last_video_pts = last_pts;
         ctx->vthr_seek_ready = seek_ready;
+        has_audio_st = ctx->has_astream;
         params_lck.unlock();
 
         if(flush_req){
             decoded_frames.clear();
             dec.flush();
-            update_frame_timer = force_frame = true;
-            eos = eos_reported = seek_ready = false;
-            remaining_time = remaining_time_set_at = 0.0;
-            last_pts = last_duration = 0.0;
+            force_frame = true;
+            eos_reported = seek_ready = false;
+            frame_timer = invalid_time_val;
             last_byte_pos = -1;
             pkt.unref();
             ctx->vidclk.set_eos(false, NAN);
@@ -565,68 +565,55 @@ void video_render_thread(VideoState* ctx){
             wait_timeout();
         }
 
-        eos = decoded_frames.empty() && dec.eofReached();
-        if(eos){
-            if(!eos_reported){
-                ctx->vidclk.set_eos(true, last_pts);
-                std::scoped_lock dlck(ctx->demux_mutex);
-                ctx->vthr_eos = eos_reported = seek_ready = true;
-            }
-        }
-
         if(pause_req != local_paused){
             local_paused = pause_req;
             ctx->vidclk.set_paused(local_paused);
         }
 
-        if((local_paused && !force_frame) || eos){
+        if(local_paused && !force_frame){
             wait_timeout();
             continue;
         }
 
-        if(!decoded_frames.empty()) {
-            if (update_frame_timer){
-                frame_timer = Utils::gettime_s();
-                update_frame_timer = false;
-            } else if(remaining_time_set_at > 0.0){
-                remaining_time = std::min(remaining_time, REFRESH_RATE);
-                const auto actual_remaining_time = remaining_time - (Utils::gettime_s() - remaining_time_set_at);
-                if(actual_remaining_time > sleep_threshold){
-                    Utils::sleep_s(actual_remaining_time);
+        if(decoded_frames.empty()){
+            if(dec.eofReached()){
+                if(!eos_reported){
+                    ctx->vidclk.set_eos(true, last_pts);
+                    eos_reported = seek_ready = true;
+                    std::scoped_lock dlck(ctx->demux_mutex);
+                    ctx->vthr_eos = true;
                 }
-                remaining_time = remaining_time_set_at = 0.0;
+                 wait_timeout();
             }
+        } else{
+            const auto time = Utils::gettime_s();
+            if (frame_timer == invalid_time_val)
+                frame_timer = time;
 
             auto& vp = decoded_frames.front();
-
             const auto nom_last_duration = vp_duration(vp.ts(), last_pts, last_duration, max_frame_duration);
-            const auto delay = compute_target_delay(nom_last_duration, ctx, max_frame_duration);
-            const auto time = Utils::gettime_s();
+            const auto delay = has_audio_st ? compute_target_delay(nom_last_duration, ctx, max_frame_duration) : nom_last_duration;
             const auto next_frame_time = frame_timer + delay;
-            if (!force_frame && time < next_frame_time) {
-                remaining_time = next_frame_time - time;
-                if(remaining_time > sleep_threshold){
-                    remaining_time_set_at = time;
-                    continue;
-                }
-            }
-
-            last_pts = vp.ts();
-            last_byte_pos = vp.pktPos();
-
-            if (!isnan(last_pts))
-                ctx->vidclk.set(last_pts, time);
-            emit playerCore.sigUpdateStreamPos(last_pts);
+            const auto actual_remaining_time = next_frame_time - time;
 
             if(!force_frame){
+                if (actual_remaining_time > sleep_threshold) {
+                    if(decoded_frames.size() < framebuffer_preferred_size)
+                        continue;//Fill the frame buffer
+                    Utils::sleep_s(std::min(actual_remaining_time, MAX_SLEEP_DURATION));
+                    const auto remaining_time = next_frame_time - Utils::gettime_s();
+                    if(remaining_time > sleep_threshold)
+                        continue;//Early wakeup, recheck the parameters
+                }
+
                 last_duration = nom_last_duration;
                 frame_timer += delay;
-                if (delay > 0 && time - frame_timer > AV_SYNC_THRESHOLD_MAX)
+                if (delay > 0 && (time - frame_timer) > AV_SYNC_THRESHOLD_MAX)
                     frame_timer = time;
 
                 if (decoded_frames.size() > 1) { //Framedrop lookahead
                     auto& nextvp = *(++decoded_frames.begin());
-                    const auto duration = vp_duration(nextvp.ts(), last_pts, last_duration, max_frame_duration);
+                    const auto duration = vp_duration(nextvp.ts(), vp.ts(), last_duration, max_frame_duration);
                     if(time > frame_timer + duration){
                         decoded_frames.pop_front();
                         decoded_frames.pop_front();
@@ -634,11 +621,20 @@ void video_render_thread(VideoState* ctx){
                     }
                 }
             }
+
             force_frame = false;
             seek_ready = true;
 
+            last_pts = vp.ts();
+            last_byte_pos = vp.pktPos();
+
             renderer->pushFrame(std::move(decoded_frames.front()));//Asynchronous double-buffering
             decoded_frames.pop_front();
+
+            if (!isnan(last_pts)) {
+                ctx->vidclk.set(last_pts, time);
+                emit playerCore.sigUpdateStreamPos(last_pts);
+            }
 
             // if (is->subtitle_st) {
             //     while (is->subpq.nb_remaining() > 0) {
