@@ -118,7 +118,7 @@ bool FormatContext::seek(const SeekInfo& info, double last_pts, int64_t last_pos
         double incr = info.increment;
         if (seek_by_bytes) {
             int64_t pos = last_pos;
-            if (pos < 0)
+            if (pos < 0 && ic->pb)
                 pos = avio_tell(ic->pb);
             if (ic->bit_rate)
                 incr *= ic->bit_rate / 8.0;//get the byte size
