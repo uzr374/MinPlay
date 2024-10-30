@@ -16,9 +16,9 @@ static bool is_realtime(AVFormatContext *s)
     return false;
 }
 
-FormatContext::FormatContext(QString url, decltype(AVFormatContext::interrupt_callback.callback) int_cb) : ic(avformat_alloc_context()) {
+FormatContext::FormatContext(QString url, decltype(AVFormatContext::interrupt_callback.callback) int_cb, void* cb_opaque) : ic(avformat_alloc_context()) {
     ic->interrupt_callback.callback = int_cb;
-    ic->interrupt_callback.opaque = nullptr;
+    ic->interrupt_callback.opaque = cb_opaque;
     ic->flags |= AVFMT_FLAG_GENPTS | AVFMT_FLAG_FAST_SEEK | AVFMT_FLAG_DISCARD_CORRUPT;
     ic->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
     AVDictionary* format_opts = nullptr;

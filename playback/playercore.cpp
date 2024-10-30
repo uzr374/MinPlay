@@ -10,15 +10,17 @@ extern "C"{
 #include "libswresample/swresample.h"
 }
 
-std::atomic_bool quit_request = false;
-bool quitRequested(){return quit_request.load();}
-
-//This function is supposed to be called exclusively from the main thread
-void setQuitRequest(bool quit){quit_request.store(quit);}
-
 void VideoState::wakeDemuxer() {
     std::scoped_lock lck(demux_mutex);
     demux_cond.notify_one();
+}
+
+void VideoState::requestQuit(){
+    quit_req.store(true);
+}
+
+bool VideoState::quitRequested(){
+    return quit_req.load();
 }
 
 // static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
@@ -365,7 +367,9 @@ void audio_render_thread(VideoState* ctx){
     auto& queue = ctx->audioq;
     auto& clk = ctx->audclk;
 
-    while(!quitRequested()){
+    bool cont = true;
+
+    while(cont){
         auto params_lck = queue.getLocker();
         const bool quit_req = ctx->athr_quit;
         if(quit_req) break;
@@ -532,7 +536,9 @@ void video_render_thread(VideoState* ctx){
         return use_last_duration ? last_duration : duration;
     };
 
-    while(!quitRequested()){
+    bool cont = true;
+
+    while(cont){
         auto params_lck = queue.getLocker();
         const bool quit_req = ctx->vthr_quit;
         if(quit_req) break;
@@ -822,7 +828,8 @@ static int demux_thread(VideoState* is)
     std::unique_ptr<FormatContext> fmt_ctx;
 
     try{
-        fmt_ctx = std::make_unique<FormatContext>(QString(is->url), [](void*){return static_cast<int>(quitRequested());});
+        fmt_ctx = std::make_unique<FormatContext>(is->url,
+            [](void* opaque){return static_cast<int>(reinterpret_cast<VideoState*>(opaque)->quitRequested());}, is);
     } catch(const std::runtime_error err){
         playerCore.log(err.what());
         return -1;
@@ -851,7 +858,7 @@ static int demux_thread(VideoState* is)
     emit playerCore.sigReportStreamDuration(fmt_ctx->duration());
     emit playerCore.setControlsActive(true);
 
-    while (!quitRequested() && !critical_error) {
+    while (!critical_error && !is->quitRequested()) {
         {
             std::unique_lock lck(is->demux_mutex);
             const bool pause_changed = (is->pause_req != local_paused);
@@ -1151,7 +1158,7 @@ static int demux_thread(VideoState* is)
 // }
 
 static void set_playback_paused(VideoState* ctx, bool paused){
-    if(quitRequested() || !ctx) return;
+    if(!ctx || ctx->quitRequested()) return;
     std::scoped_lock lck(ctx->demux_mutex);
     ctx->pause_req = paused;
 }
@@ -1173,12 +1180,10 @@ void PlayerCore::openURL(QUrl url){
 
 void PlayerCore::stopPlayback(){
     if(!is_active()) return;
-    setQuitRequest(true);
+    player_ctx->requestQuit();
     if(player_ctx->demux_thr.joinable())
         player_ctx->demux_thr.join();
     player_ctx = nullptr;
-    setQuitRequest(false);
-    QCoreApplication::processEvents();//To properly delete the renderer
 }
 
 void PlayerCore::pausePlayback(){
@@ -1195,14 +1200,13 @@ void PlayerCore::togglePause(){
 }
 
 bool PlayerCore::is_active() {
-    return player_ctx && !quitRequested();
+    return player_ctx && !player_ctx->quitRequested();
 }
 
 void PlayerCore::requestSeekPercent(double percent){
     if(!is_active()) return;
-    const SeekInfo info{.type = SeekInfo::SEEK_PERCENT, .percent = percent};
     std::scoped_lock lck(player_ctx->demux_mutex);
-    player_ctx->seek_info = info;
+    player_ctx->seek_info = SeekInfo{.type = SeekInfo::SEEK_PERCENT, .percent = percent};;
     player_ctx->seek_req = true;
 }
 

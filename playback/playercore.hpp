@@ -14,6 +14,7 @@
 #include <QUrl>
 
 struct VideoState final {
+    std::atomic_bool quit_req = false;
     std::thread demux_thr;
     std::mutex demux_mutex;
     std::condition_variable demux_cond;
@@ -46,6 +47,8 @@ struct VideoState final {
     QString url;
 
     void wakeDemuxer();//Warning: don't call if a packet queue mutex is being held
+    void requestQuit();
+    bool quitRequested();
 };
 
 class PlayerCore final : public QObject

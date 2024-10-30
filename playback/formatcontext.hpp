@@ -39,7 +39,7 @@ private:
 
 public:
     FormatContext() = delete;
-    FormatContext(QString url, decltype(AVFormatContext::interrupt_callback.callback) int_cb);
+    FormatContext(QString url, decltype(AVFormatContext::interrupt_callback.callback) int_cb, void* cb_opaque);
     ~FormatContext();
 
     bool isRealtime() const;
