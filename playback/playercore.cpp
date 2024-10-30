@@ -235,10 +235,8 @@ void setQuitRequest(bool quit){quit_request.store(quit);}
 //     return 0;
 // }
 
-static std::vector<float> convert_audio_frame(const CAVFrame& af,
+static bool convert_audio_frame(const CAVFrame& af, std::vector<float>& adata,
                                               AudioParams& audio_src, const AudioParams& audio_tgt,  SwrContext*& swr_ctx, bool flush){
-    std::vector<float> adata;
-
     if (af.sampleFmt() != audio_src.fmt || af.sampleRate() != audio_src.freq ||
         av_channel_layout_compare(&af.chLayout(), &audio_src.ch_layout.constAv())) {
         swr_free(&swr_ctx);
@@ -252,7 +250,7 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
                    af.sampleRate(), av_get_sample_fmt_name(af.sampleFmt()), af.chCount(),
                    audio_tgt.freq, av_get_sample_fmt_name(audio_tgt.fmt), audio_tgt.ch_layout.nbChannels());
             swr_free(&swr_ctx);
-            return adata;
+            return false;
         }
         av_log(NULL, AV_LOG_INFO,
                "Created a sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels\n",
@@ -267,7 +265,7 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
         const int out_count = swr_get_out_samples(swr_ctx, af.nbSamples());
         if (out_count < 0) {
             av_log(NULL, AV_LOG_ERROR, "swr_get_out_samples() failed\n");
-            return adata;
+            return false;
         }
 
         adata.resize(out_count * audio_tgt.ch_layout.nbChannels(), 0.0f);
@@ -277,7 +275,7 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
         if (len2 <= 0) {
             if(len2 < 0)
                 av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
-            adata.clear();
+            return false;
         } else {
             adata.resize(len2 * audio_tgt.ch_layout.nbChannels());
             if(flush){
@@ -300,10 +298,11 @@ static std::vector<float> convert_audio_frame(const CAVFrame& af,
         }
     } else {
         const auto data_ptr = reinterpret_cast<const float*>(af.constDataPlane(0));
-        adata = std::vector<float>(data_ptr, data_ptr + af.nbSamples() * af.chCount());
+        adata.resize(af.nbSamples() * af.chCount(), 0.0f);
+        std::copy(data_ptr, data_ptr + adata.size(), adata.begin());
     }
 
-    return adata;
+    return true;
 }
 
 static SDL_AudioStream* audio_open(CAVChannelLayout wanted_channel_layout, int wanted_sample_rate)
@@ -434,14 +433,14 @@ void audio_render_thread(VideoState* ctx){
                 last_duration = af.dur();
                 last_byte_pos = af.pktPos();
                 const bool eos_upcoming = dec.eofReached() && decoded_frames.size() == 1;
-                adata = convert_audio_frame(af, audio_src, audio_tgt, swr_ctx, eos_upcoming);
+                const bool conv_success = convert_audio_frame(af, adata, audio_src, audio_tgt, swr_ctx, eos_upcoming);
                 decoded_frames.pop_front();
-                const auto stream_pos = last_pts - buffered_duration;
                 if (!std::isnan(last_pts)) {
+                    const auto stream_pos = last_pts - buffered_duration;
                     ctx->audclk.set(stream_pos);
                     emit playerCore.sigUpdateStreamPos(stream_pos);
                 }
-                if(!adata.empty()){
+                if(conv_success && !adata.empty()){
                     SDL_PutAudioStreamData(astream, adata.data(), adata.size() * sizeof(float));
                     adata.clear();
                 }
