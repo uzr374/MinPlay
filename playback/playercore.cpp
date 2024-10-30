@@ -883,6 +883,7 @@ static int demux_thread(VideoState* is)
                     }
                     is->flush_athr = is->flush_vthr = queue_attachments_req = true;
                     is->vthr_seek_ready = is->athr_seek_ready = false;
+                    eos = false;
                 }
                 is->seek_info = SeekInfo();
             }
@@ -896,68 +897,63 @@ static int demux_thread(VideoState* is)
             audio_eos = is->has_astream && is->athr_eos;
         }
 
-        if (!eos && !fmt_ctx->isRealtime() && check_buffer_fullness(is->has_astream ?
-            fmt_ctx->av()->streams[fmt_ctx->audioStIdx()] : nullptr, is->audioq,
-                is->has_vstream ? fmt_ctx->av()->streams[fmt_ctx->videoStIdx()] : nullptr, is->videoq)) {
+        if(eos){
             wait_timeout = true;
-            continue;
-        }
-
-        if (!local_paused && eos && video_eos && audio_eos) {
-            wait_timeout = true;
-            continue;
-        //     /*if (loop != 1 && (!loop || --loop)) {
-        //         stream_seek(is, 0, 0, 0);
-        //     } else if (autoexit) {
-        //         ret = AVERROR_EOF;
-        //         goto fail;
-        //     }*/
-        }
-
-        if (local_paused && fmt_ctx->isRTSPorMMSH()) {
-            /* wait 10 ms to avoid trying to get another packet */
-            /* XXX: horrible */
-            wait_timeout = true;
-            continue;
-        }
-
-        CAVPacket cpkt;
-        if (queue_attachments_req) {
-            queue_attachments_req = false;
-            if (is->has_vstream && fmt_ctx->streams().at(fmt_ctx->videoStIdx()).isAttachedPic()) {
-                if (av_packet_ref(cpkt.av(), &fmt_ctx->av()->streams[fmt_ctx->videoStIdx()]->attached_pic) == 0){
-                    is->videoq.put(std::move(cpkt));
-                    is->videoq.put_nullpacket();
+            if (video_eos && audio_eos) {
+                //Loop/request the next track here
+            }
+        } else{
+            if (!fmt_ctx->isRealtime() && check_buffer_fullness(is->has_astream ?
+                    fmt_ctx->av()->streams[fmt_ctx->audioStIdx()] : nullptr, is->audioq,
+                    is->has_vstream ? fmt_ctx->av()->streams[fmt_ctx->videoStIdx()] : nullptr, is->videoq)) {
+                wait_timeout = true;
+            } else{
+                if (local_paused && fmt_ctx->isRTSPorMMSH()) {
+                    /* wait 10 ms to avoid trying to get another packet */
+                    /* XXX: horrible */
+                    wait_timeout = true;
+                    continue;
                 }
-                continue;
-            }
-        }
 
-        const auto readRes = fmt_ctx->read(cpkt);
-        if (readRes < 0) {
-            if ((readRes == AVERROR_EOF) && !eos) {
-                eos = true;
-                if (is->has_vstream)
-                    is->videoq.put_nullpacket();
-                if (is->has_astream)
-                    is->audioq.put_nullpacket();
-                if (is->has_sub_stream)
-                    is->subtitleq.put_nullpacket();
-            } else if (readRes == AVERROR_EXIT) {
-                playerCore.log("Demuxer: critical error");
-                break;
-            }
-            wait_timeout = true;
-        } else {
-            eos = false;
-            auto pkt = cpkt.av();
-            if (pkt->stream_index == fmt_ctx->audioStIdx()) {
-                is->audioq.put(std::move(cpkt));
-            } else if (pkt->stream_index == fmt_ctx->videoStIdx()
-                       && !(fmt_ctx->streams().at(fmt_ctx->videoStIdx()).isAttachedPic())) {
-                is->videoq.put(std::move(cpkt));
-            } else if (pkt->stream_index == fmt_ctx->subStIdx()) {
-                is->subtitleq.put(std::move(cpkt));
+                CAVPacket cpkt;
+                if (queue_attachments_req) {
+                    queue_attachments_req = false;
+                    if (is->has_vstream && fmt_ctx->streams().at(fmt_ctx->videoStIdx()).isAttachedPic()) {
+                        if (av_packet_ref(cpkt.av(), &fmt_ctx->av()->streams[fmt_ctx->videoStIdx()]->attached_pic) == 0){
+                            is->videoq.put(std::move(cpkt));
+                            is->videoq.put_nullpacket();
+                            continue;
+                        }
+                    }
+                }
+
+                const auto readRes = fmt_ctx->read(cpkt);
+                if (readRes < 0) {
+                    if ((readRes == AVERROR_EOF) && !eos) {
+                        eos = true;
+                        if (is->has_vstream)
+                            is->videoq.put_nullpacket();
+                        if (is->has_astream)
+                            is->audioq.put_nullpacket();
+                        if (is->has_sub_stream)
+                            is->subtitleq.put_nullpacket();
+                    } else if (readRes == AVERROR_EXIT) {
+                        playerCore.log("Demuxer: critical error");
+                        break;
+                    }
+                    wait_timeout = true;
+                } else {
+                    eos = false;
+                    auto pkt = cpkt.av();
+                    if (pkt->stream_index == fmt_ctx->audioStIdx()) {
+                        is->audioq.put(std::move(cpkt));
+                    } else if (pkt->stream_index == fmt_ctx->videoStIdx()
+                               && !(fmt_ctx->streams().at(fmt_ctx->videoStIdx()).isAttachedPic())) {
+                        is->videoq.put(std::move(cpkt));
+                    } else if (pkt->stream_index == fmt_ctx->subStIdx()) {
+                        is->subtitleq.put(std::move(cpkt));
+                    }
+                }
             }
         }
     }
