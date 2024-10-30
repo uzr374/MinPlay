@@ -26,7 +26,7 @@ FormatContext::FormatContext(QString url, decltype(AVFormatContext::interrupt_ca
     auto err = avformat_open_input(&ic, url.toStdString().c_str(), nullptr, &format_opts);
     av_dict_free(&format_opts);
     if (err < 0) {
-        throw std::runtime_error("Failed to find stream info");
+        throw std::runtime_error(std::string("Failed to open url: ") + url.toStdString());
     }
     dynamic_streams = (ic->ctx_flags & AVFMTCTX_NOHEADER);
     seekable = (ic->ctx_flags & AVFMTCTX_UNSEEKABLE);

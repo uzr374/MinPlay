@@ -815,10 +815,10 @@ static int demux_thread(VideoState* is)
         fmt_ctx = std::make_unique<FormatContext>(QString(is->url), [](void*){return static_cast<int>(quitRequested());});
     } catch(const std::runtime_error err){
         playerCore.log(err.what());
-        critical_error = true;
+        return -1;
     } catch(...){
         playerCore.log("FormatContext: unknown error while initializing");
-        critical_error = true;
+        return -1;
     }
 
     is->max_frame_duration = fmt_ctx->maxFrameDuration();
