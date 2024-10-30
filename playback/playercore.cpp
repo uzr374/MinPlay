@@ -5,7 +5,6 @@
 #include <cstdarg>
 
 extern "C"{
-#include "libavutil/dict.h"
 #include "libavformat/avformat.h"
 #include "libswscale/swscale.h"
 #include "libswresample/swresample.h"
@@ -16,6 +15,11 @@ bool quitRequested(){return quit_request.load();}
 
 //This function is supposed to be called exclusively from the main thread
 void setQuitRequest(bool quit){quit_request.store(quit);}
+
+void VideoState::wakeDemuxer() {
+    std::scoped_lock lck(demux_mutex);
+    demux_cond.notify_one();
+}
 
 // static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
 //     int ret = AVERROR(EAGAIN);
@@ -420,6 +424,8 @@ void audio_render_thread(VideoState* ctx){
                 std::scoped_lock dlck(ctx->demux_mutex);
                 ctx->athr_eos = eos_reported = seek_ready = true;
             }
+        } else if(queue_is_empty){
+             ctx->wakeDemuxer();
         }
 
         const auto abuffer_hungry = buffered_duration < audiobuf_preferred_duration;
@@ -565,6 +571,10 @@ void video_render_thread(VideoState* ctx){
             wait_timeout();
         }
 
+        if(!dec.eofReached() && queue_is_empty){
+            ctx->wakeDemuxer();
+        }
+
         if(pause_req != local_paused){
             local_paused = pause_req;
             vidclk.set_paused(local_paused);
@@ -592,7 +602,8 @@ void video_render_thread(VideoState* ctx){
 
             auto& vp = decoded_frames.front();
             const auto nom_last_duration = vp_duration(vp.ts(), last_pts, last_duration, max_frame_duration);
-            const auto delay = has_audio_st ? compute_target_delay(nom_last_duration, vidclk.get_nolock() - ctx->audclk.get(), max_frame_duration) : nom_last_duration;
+            const auto delay = has_audio_st ? compute_target_delay(nom_last_duration,
+                vidclk.get_nolock() - ctx->audclk.get(), max_frame_duration) : nom_last_duration;
             const auto next_frame_time = frame_timer + delay;
             const auto actual_remaining_time = next_frame_time - time;
 
@@ -889,7 +900,7 @@ static int demux_thread(VideoState* is)
 
             if(wait_timeout){
                 wait_timeout = false;
-                is->continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
+                is->demux_cond.wait_for(lck, std::chrono::milliseconds(10));
             }
 
             video_eos = is->has_vstream && is->vthr_eos;

@@ -16,7 +16,7 @@
 struct VideoState final {
     std::thread demux_thr;
     std::mutex demux_mutex;
-    std::condition_variable continue_read_thread;
+    std::condition_variable demux_cond;
     bool seek_req = false, pause_req = false, athr_eos = false, vthr_eos = false;
     SeekInfo seek_info;
     int64_t last_seek_pos = 0, last_seek_rel = 0;
@@ -44,6 +44,8 @@ struct VideoState final {
     double max_frame_duration = 0.0;// maximum duration of a frame - above this, we consider the jump a timestamp discontinuity
 
     QString url;
+
+    void wakeDemuxer();//Warning: don't call if a packet queue mutex is being held
 };
 
 class PlayerCore final : public QObject
