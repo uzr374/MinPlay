@@ -333,7 +333,7 @@ static SDL_AudioStream* audio_open(CAVChannelLayout wanted_channel_layout, int w
 void audio_render_thread(VideoState* ctx){
     static constexpr auto audiobuf_preferred_duration = 0.1, audiobuf_empty_threshold = 0.01;//in seconds
     static constexpr auto timeout = 0.016;//16 ms sleep timeout
-    static constexpr auto framebuffer_preferred_size = 12; //Try to keep enough CAVFrames worth of data buffered in decoded_frames
+    static constexpr auto framebuffer_preferred_size = 2; //Try to keep enough CAVFrames worth of data buffered in decoded_frames
 
     auto& dec = *ctx->auddec;
     const auto audio_tgt = ([&dec]{auto format = dec.outputAudioFormat(); format.fmt = AV_SAMPLE_FMT_FLT; return format;})();
