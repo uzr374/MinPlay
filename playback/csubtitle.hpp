@@ -17,6 +17,7 @@ private:
     bool uploaded = false;
     double sub_pts = 0.0;
     double sub_duration = 0.0;
+    double start_time = 0.0, end_time = 0.0;
 
     void move_from(CSubtitle&& rhs);
 public:
@@ -40,12 +41,21 @@ public:
     bool isUploaded() const{return uploaded;}
     double ts() const{return sub_pts;}
     double duration() const{return sub_duration;}
+    double startTime() const{return start_time;}
+    double endTime() const{return end_time;}
     bool isBitmap() const{return sub.format == 0;}
+    unsigned numRects() const{return sub.num_rects;}
+    AVSubtitleRect** rects() const{return sub.rects;}
+    const AVSubtitleRect& rectAt(int idx);
 
     void setUploaded(bool upl){uploaded = upl;}
-    void setTimingInfo(double pts, double duration){
-        sub_pts = pts;
-        sub_duration = duration;
+    void calcTimingInfo(){
+        if(sub.pts != AV_NOPTS_VALUE){
+            sub_pts = sub.pts/(double)AV_TIME_BASE;
+        }
+        start_time = sub_pts + sub.start_display_time / 1000.0;
+        end_time = sub_pts + sub.end_display_time / 1000.0;
+        sub_duration = end_time - start_time;
     }
     void ensureDimensions(int ref_w, int ref_h){
         if(!sub_width || !sub_height){

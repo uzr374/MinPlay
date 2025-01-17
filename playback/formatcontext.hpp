@@ -14,12 +14,16 @@ extern "C"{
 
 struct SeekInfo final {
     enum SeekType{
-        SEEK_NONE, SEEK_PERCENT, SEEK_INCREMENT, SEEK_CHAPTER
+        SEEK_NONE, SEEK_PERCENT, SEEK_INCREMENT, SEEK_CHAPTER, SEEK_STREAM_SWITCH
     };
 
     SeekType type = SEEK_NONE;
     double percent = 0.0, increment = 0.0;
-    int chapter_incr = 0;
+    int chapter_incr = 0, chapter_nb = -1;
+
+    /*if stream_idx is negative and stream_type is set, then the streams of given type are cycled*/
+    int stream_idx = -1;
+    AVMediaType stream_type = AVMEDIA_TYPE_UNKNOWN;
 };
 
 class FormatContext final
@@ -34,7 +38,6 @@ private:
     double max_frame_duration = 0.0, duration_s = 0.0;
     int video_idx = -1, video_last_idx = -1, audio_idx = -1, audio_last_idx = -1, sub_idx = -1, sub_last_idx = -1;
     int64_t last_seek_pos = 0, last_seek_rel = 0;
-    int seek_flags = 0;
     QString title;
 
 public:

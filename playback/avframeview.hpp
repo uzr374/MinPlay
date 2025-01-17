@@ -1,39 +1,19 @@
-#ifndef CAVFRAME_H
-#define CAVFRAME_H
+#ifndef AVFRAMEVIEW_HPP
+#define AVFRAMEVIEW_HPP
 
 extern "C"{
-#include <libavutil/frame.h>
-#include <libavutil/pixdesc.h>
+#include "libavutil/frame.h"
+#include "libavutil/pixdesc.h"
 }
 
-class CAVFrame
+class AVFrameView
 {
 private:
-    AVFrame* frame = nullptr;
-    int64_t pkt_pos = -1LL;
-    double pts = 0.0, duration = 0.0;
-    bool uploaded = false;
+    const AVFrame& frame;
 
-    void copyParams(const CAVFrame& src);
-    const AVPixFmtDescriptor* getPixFmtDesc() const;
 public:
-    CAVFrame();
-    ~CAVFrame();
-    CAVFrame(const CAVFrame&);
-    CAVFrame(CAVFrame&&);
-
-    const AVFrame* constAv() const;
-    AVFrame* av();
-    void unref();
-    bool ref(const CAVFrame& src);
-    void move_ref(CAVFrame& src);
-    CAVFrame& operator=(const CAVFrame&);
-    CAVFrame& operator=(CAVFrame&&);
-
-    void setPktPos(int64_t pos);
-    void setTimingInfo(double new_pts, double new_duration);
-    bool create(int w, int h, AVPixelFormat fmt);
-    bool ensureParams(int w, int h, AVPixelFormat fmt);
+    AVFrameView() = delete;
+    AVFrameView(const AVFrame&);
 
     //Common fields
     const uint8_t* const constDataPlane(int idx) const;
@@ -66,8 +46,7 @@ public:
     int width(int plane) const;
     int height(int plane) const;
     bool videoFrameValid() const;
-    bool isUploaded() const;
-    void setUploaded(bool upl);
+    const AVPixFmtDescriptor* getPixFmtDesc() const;
 
     //Audio-related
     AVSampleFormat sampleFmt() const;
@@ -78,4 +57,4 @@ public:
     bool audioFrameValid() const;
 };
 
-#endif // CAVFRAME_H
+#endif // AVFRAMEVIEW_HPP

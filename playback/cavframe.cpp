@@ -34,6 +34,26 @@ void CAVFrame::copyParams(const CAVFrame& src){
     uploaded = false;
 }
 
+bool CAVFrame::create(int w, int h, AVPixelFormat fmt){
+    unref();
+    frame->format = fmt;
+    frame->width = w;
+    frame->height = h;
+
+    if(av_frame_get_buffer(frame, 0) == 0){
+        return av_frame_make_writable(frame) == 0;
+    }
+
+    return false;
+}
+
+bool CAVFrame::ensureParams(int w, int h, AVPixelFormat fmt){
+    if(w != width() || h != height() || pixFmt() != fmt){
+        return create(w, h, fmt);
+    }
+    return true;
+}
+
 void CAVFrame::setPktPos(int64_t pos){pkt_pos = pos;}
 void CAVFrame::setTimingInfo(double new_pts, double new_duration){pts = new_pts; duration = new_duration;}
 double CAVFrame::ts() const{return pts;}

@@ -1,5 +1,5 @@
 #include "formatcontext.hpp"
-#include "playercore.hpp"
+#include "playbackengine.hpp"
 
 #include <stdexcept>
 
@@ -81,9 +81,6 @@ bool FormatContext::seek(const SeekInfo& info, double last_pts, int64_t last_pos
     {
         last_seek_pos = pos;
         last_seek_rel = rel;
-        seek_flags = 0;
-        if (seek_by_bytes)
-            seek_flags |= AVSEEK_FLAG_BYTE;
     };
 
     if(ic->ctx_flags & AVFMTCTX_UNSEEKABLE){
@@ -140,16 +137,17 @@ bool FormatContext::seek(const SeekInfo& info, double last_pts, int64_t last_pos
     default:
         return false;
     }
+
     /*Execute the seek*/
+    // FIXME the +-2 is due to rounding being not done in the correct direction in generation
+    //      of the seek_pos/seek_rel variables
     const int64_t seek_target = last_seek_pos;
     const int64_t seek_min    = last_seek_rel > 0 ? seek_target - last_seek_rel + 2: INT64_MIN;
     const int64_t seek_max    = last_seek_rel < 0 ? seek_target - last_seek_rel - 2: INT64_MAX;
-    // FIXME the +-2 is due to rounding being not done in the correct direction in generation
-    //      of the seek_pos/seek_rel variables
 
+    const auto seek_flags = seek_by_bytes ? AVSEEK_FLAG_BYTE : 0;
     const auto seekRes = avformat_seek_file(ic, -1, seek_min, seek_target, seek_max, seek_flags);
     const auto seek_succeeded = seekRes >= 0;
-    seek_flags = 0;
     if(seek_succeeded)
         eof = false;
 
@@ -168,6 +166,7 @@ int FormatContext::read(CAVPacket& into){
         }
     } else {
         eof = false;
+        into.setTb(ic->streams[into.av()->stream_index]->time_base);
     }
     return readRes;
 }

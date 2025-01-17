@@ -4,7 +4,7 @@
 #include "../../playback/sdlrenderer.hpp"
 
 #include <QWidget>
-#include <QBoxLayout>
+#include <QHBoxLayout>
 
 class VideoDisplayWidget final : public QWidget
 {
@@ -12,7 +12,7 @@ class VideoDisplayWidget final : public QWidget
     Q_DISABLE_COPY_MOVE(VideoDisplayWidget);
 
     SDLRenderer* renderer = nullptr;
-    QBoxLayout* lout = nullptr;
+    QHBoxLayout* lout = nullptr;
     QWidget* wrapperW = nullptr;
 
     void resizeEvent(QResizeEvent* evt) override;
@@ -21,8 +21,7 @@ public:
     VideoDisplayWidget(QWidget* parent);
     ~VideoDisplayWidget();
 
-    Q_INVOKABLE void destroySDLRenderer();
-    Q_INVOKABLE SDLRenderer* createSDLRenderer();
+    SDLRenderer* getSDLRenderer();
 };
 
 #endif // VIDEODISPLAYWIDGET_HPP

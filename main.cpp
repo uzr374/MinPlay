@@ -28,8 +28,10 @@ static QPalette getDarkPalette(){
 
 int main(int argc, char *argv[])
 {
-    const bool sdl_initialized = SDL_Init(0);
+    bool sdl_initialized = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
+    if(!sdl_initialized) sdl_initialized = SDL_Init(SDL_INIT_VIDEO);
     if(!sdl_initialized) return -1;
+
     QApplication a(argc, argv);
     a.setPalette(getDarkPalette());
 
@@ -42,9 +44,11 @@ int main(int argc, char *argv[])
             break;
         }
     }
+
     MainWindow w;
     w.show();
     const auto ret = a.exec();
+
     SDL_Quit();
 
     return ret;

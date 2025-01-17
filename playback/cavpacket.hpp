@@ -8,6 +8,7 @@ extern "C" {
 class CAVPacket final {
     AVPacket *pkt = nullptr;
     bool is_flush = false;
+    AVRational tb{};
 
     static void copy_props(const CAVPacket& src, CAVPacket& dst);
 
@@ -19,8 +20,11 @@ public:
     const AVPacket* constAv() const;
     void unref();
     void setFlush(bool flush);
+    void setTb(AVRational src_tb);
     bool isEmpty() const;
     bool isFlush() const;
+    int size() const;
+    double dur() const;
 
     CAVPacket(const CAVPacket& src);
     CAVPacket(CAVPacket&& src);

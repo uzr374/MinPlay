@@ -2,7 +2,7 @@
 #define MAINWINDOW_H
 
 #include "src/GUI/MenuBarMenu.hpp"
-#include "playback/playercore.hpp"
+#include "playback/playbackengine.hpp"
 #include "src/utils.hpp"
 
 #include <QMainWindow>

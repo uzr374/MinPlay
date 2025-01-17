@@ -8,10 +8,11 @@ CAVPacket::~CAVPacket(){av_packet_free(&pkt);}
 
 AVPacket* CAVPacket::av(){return pkt;}
 const AVPacket* CAVPacket::constAv() const{return pkt;}
-void CAVPacket::unref(){av_packet_unref(pkt); is_flush = false;}
+void CAVPacket::unref(){av_packet_unref(pkt); is_flush = false; tb = {};}
 
 void CAVPacket::copy_props(const CAVPacket& src, CAVPacket& dst){
     dst.is_flush = src.isFlush();
+    dst.tb = src.tb;
 }
 
 CAVPacket::CAVPacket(const CAVPacket& src) : CAVPacket() {
@@ -47,3 +48,9 @@ bool CAVPacket::isFlush() const{
 }
 
 void CAVPacket::setFlush(bool flush){unref(); is_flush = flush;}
+
+void CAVPacket::setTb(AVRational src_tb){tb = src_tb;}
+
+int CAVPacket::size() const{return pkt->size;}
+
+double CAVPacket::dur() const{return (pkt->duration == AV_NOPTS_VALUE) ? 0.0 : av_q2d(tb) * pkt->duration;}

@@ -36,12 +36,12 @@ set(PROJECT_SOURCES
         src/GUI/MenuBar.cpp
         src/GUI/ToolBar.hpp
         src/GUI/ToolBar.cpp
-        playback/clock.hpp
-        playback/clock.cpp
+
+
         playback/cavpacket.hpp
         playback/cavpacket.cpp
-        playback/PacketQueue.hpp
-        playback/PacketQueue.cpp
+
+
         ${TS_FILES}
 )
 
@@ -55,9 +55,9 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         playback/sdlrenderer.hpp playback/sdlrenderer.cpp
 
         src/GUI/videodisplaywidget.hpp src/GUI/videodisplaywidget.cpp
-        playback/playercore.hpp playback/playercore.cpp
-        playback/decoder.hpp playback/decoder.cpp
-        playback/videodec.hpp playback/videodec.cpp
+        playback/playbackengine.hpp playback/playbackengine.cpp
+
+
         playback/cavstream.hpp playback/cavstream.cpp
         playback/sdlkeymap.cpp
         playback/sdlkeymap.hpp
@@ -70,6 +70,8 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         src/GUI/Playlist.hpp src/GUI/Playlist.cpp
         src/GUI/InfoWidget.h src/GUI/InfoWidget.cpp
         playback/formatcontext.hpp playback/formatcontext.cpp
+        playback/avframeview.hpp playback/avframeview.cpp
+
 
 
     )
