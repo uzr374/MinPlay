@@ -13,6 +13,7 @@ void CAVPacket::unref(){av_packet_unref(pkt); is_flush = false; tb = {};}
 void CAVPacket::copy_props(const CAVPacket& src, CAVPacket& dst){
     dst.is_flush = src.isFlush();
     dst.tb = src.tb;
+    dst.pkt_serial = src.serial();
 }
 
 CAVPacket::CAVPacket(const CAVPacket& src) : CAVPacket() {
@@ -51,6 +52,12 @@ void CAVPacket::setFlush(bool flush){unref(); is_flush = flush;}
 
 void CAVPacket::setTb(AVRational src_tb){tb = src_tb;}
 
+void CAVPacket::setSerial(int ser){pkt_serial = ser;}
+
+int CAVPacket::serial() const{return pkt_serial;}
+
 int CAVPacket::size() const{return pkt->size;}
 
 double CAVPacket::dur() const{return (pkt->duration == AV_NOPTS_VALUE) ? 0.0 : av_q2d(tb) * pkt->duration;}
+
+int CAVPacket::streamIndex() const{return pkt->stream_index;}

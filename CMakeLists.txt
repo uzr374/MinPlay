@@ -71,6 +71,7 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         src/GUI/InfoWidget.h src/GUI/InfoWidget.cpp
         playback/formatcontext.hpp playback/formatcontext.cpp
         playback/avframeview.hpp playback/avframeview.cpp
+        playback/packetqueue.hpp playback/packetqueue.cpp
 
 
 
