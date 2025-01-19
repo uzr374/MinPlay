@@ -1,5 +1,4 @@
 #include "playbackengine.hpp"
-#include "formatcontext.hpp"
 #include "avframeview.hpp"
 #include "cavchannellayout.hpp"
 #include "packetqueue.hpp"
@@ -21,7 +20,6 @@ extern "C"{
 #include "libavutil/mem.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/dict.h"
-#include "libavutil/fifo.h"
 #include "libavutil/samplefmt.h"
 #include "libavutil/time.h"
 #include "libavutil/bprint.h"
@@ -66,7 +64,7 @@ extern "C"{
 
 /* polls for possible required screen refresh at least this often, should be less than 1/fps */
 #define REFRESH_RATE 0.01
-#define SDL_AUDIO_BUFLEN 0.15 /*in seconds*/
+#define SDL_AUDIO_BUFLEN 0.2 /*in seconds*/
 
 #define VIDEO_PICTURE_QUEUE_SIZE 3
 #define SUBPICTURE_QUEUE_SIZE 16
@@ -2145,20 +2143,26 @@ static double refresh_audio(VideoState* ctx){
     double remaining_time = REFRESH_RATE;
 
     if(!ctx->paused && ctx->astream){
-        double buffered_time = double(SDL_GetAudioStreamQueued(ctx->astream) / ctx->audio_tgt.frame_size)/ctx->audio_tgt.freq;
+        double buffered_time = double(SDL_GetAudioStreamQueued(ctx->astream)) / ctx->audio_tgt.bytes_per_sec;
         if(buffered_time > SDL_AUDIO_BUFLEN){
             remaining_time = buffered_time / 4;
         } else{
-            const auto resampled_data_size = audio_decode_frame(ctx);
-            if(resampled_data_size > 0){
-                SDL_PutAudioStreamData(ctx->astream, ctx->audio_buf.data(), resampled_data_size);
-                buffered_time = double(SDL_GetAudioStreamQueued(ctx->astream) / ctx->audio_tgt.frame_size)/ctx->audio_tgt.freq;
-                if(!std::isnan(ctx->audio_clock)){
-                    set_clock(&ctx->audclk, ctx->audio_clock - buffered_time, ctx->audio_clock_serial);
-                    sync_clock_to_slave(&ctx->extclk, &ctx->audclk);
+            double decoded_dur = 0.0;
+            do{
+                const auto resampled_data_size = audio_decode_frame(ctx);
+                if(resampled_data_size > 0){
+                    decoded_dur += (double)resampled_data_size / ctx->audio_tgt.bytes_per_sec;
+                    SDL_PutAudioStreamData(ctx->astream, ctx->audio_buf.data(), resampled_data_size);
+                    buffered_time = double(SDL_GetAudioStreamQueued(ctx->astream) / ctx->audio_tgt.frame_size)/ctx->audio_tgt.freq;
+                    if(!std::isnan(ctx->audio_clock)){
+                        set_clock(&ctx->audclk, ctx->audio_clock - buffered_time, ctx->audio_clock_serial);
+                        sync_clock_to_slave(&ctx->extclk, &ctx->audclk);
+                    }
+                    remaining_time = buffered_time < SDL_AUDIO_BUFLEN ? 0.0 : buffered_time / 4;
+                } else{
+                    break;
                 }
-                remaining_time = buffered_time < SDL_AUDIO_BUFLEN ? 0.0 : buffered_time / 4;
-            }
+            }while(decoded_dur < SDL_AUDIO_BUFLEN);
         }
     }
 
