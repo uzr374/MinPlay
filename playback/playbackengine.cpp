@@ -2493,8 +2493,11 @@ void PlayerCore::refreshPlayback(){
         const auto remaining_time = playback_loop(player_ctx) * 1000;
         //qDebug() << "Remaining time: " << remaining_time;
         refresh_timer.setInterval(static_cast<int>(remaining_time));
-        if(!refresh_timer.isActive())
-            refresh_timer.start(Qt::PreciseTimer);
+        if(!refresh_timer.isActive()){
+            refresh_timer.setTimerType(Qt::PreciseTimer);
+            refresh_timer.start();
+        }
+
     } else{
         refresh_timer.stop();
     }
