@@ -34,8 +34,6 @@ FormatContext::FormatContext(QString url, decltype(AVFormatContext::interrupt_ca
         const auto errmsg = "Could not find codec parameters";
         if (!dynamic_streams)
             throw std::runtime_error(errmsg);
-        else
-            playerCore.log(errmsg);
     }
     if (ic->pb)
         ic->pb->eof_reached = 0; // FIXME hack, ffplay maybe should not use avio_feof() to test for the end
@@ -84,7 +82,6 @@ bool FormatContext::seek(const SeekInfo& info, double last_pts, int64_t last_pos
     };
 
     if(ic->ctx_flags & AVFMTCTX_UNSEEKABLE){
-        playerCore.log("Impossible to seek in an unseekable stream!");
         return true;//Only return false if avformat_seek_file() failed
     }
 
@@ -106,8 +103,6 @@ bool FormatContext::seek(const SeekInfo& info, double last_pts, int64_t last_pos
             const int ss   = (ns % 60);
             const int64_t ts = frac * ic->duration + (ic->start_time == AV_NOPTS_VALUE ? 0LL : ic->start_time);
             set_seek(ts, 0);
-            playerCore.log("Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)", frac*100,
-                           hh, mm, ss, thh, tmm, tss);
         }
         break;
     case SeekInfo::SEEK_INCREMENT:

@@ -23,16 +23,15 @@ private:
     double stream_duration = 0.0, cur_pos = 0.0;
     QTimer refresh_timer;
 
-    void toggle_pause();
-    bool is_active();
+private:
+    void handleStreamsUpdate();
+    void updateGUI();
+
+signals:
+    void sigUpdateStreams(std::vector<class CAVStream> streams);
 
 public:
    PlayerCore(QObject* parent, VideoDisplayWidget* video_dw, LoggerWidget* logW);
-   static PlayerCore& instance();
-
-   inline SDLRenderer* sdlRenderer(){return video_renderer;}
-   void createSDLRenderer();
-   void destroySDLRenderer();
    void log(const char* fmt, ...);
 
    public slots:
@@ -43,17 +42,11 @@ public:
         void togglePause();
         void requestSeekPercent(double percent);
         void requestSeekIncr(double incr);
-        void reportStreamDuration(double dur);
-        void updateStreamPos(double pos);
         void refreshPlayback();
 
     signals:
-        void sigReportStreamDuration(double duration);
-        void sigUpdateStreamPos(double pos);
         void updatePlaybackPos(double pos, double dur);
         void setControlsActive(bool active);
 };
-
-#define playerCore PlayerCore::instance()
 
 #endif // PLAYBACKENGINE_H

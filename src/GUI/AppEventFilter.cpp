@@ -3,8 +3,8 @@
 
 #include <QKeyEvent>
 
-AppEventFilter::AppEventFilter(QObject *parent)
-    : QObject{parent}
+AppEventFilter::AppEventFilter(PlayerCore& cor, QObject *parent) : core(cor),
+     QObject{parent}
 {
 
 }
@@ -26,13 +26,19 @@ bool AppEventFilter::eventFilter(QObject* sender, QEvent* evt){
 void AppEventFilter::handleKeyEvent(QKeyEvent* evt){
     switch (evt->key()) {
     case Qt::Key_Space:
-        playerCore.togglePause();
+        core.togglePause();
         break;
     case Qt::Key_Right:
-        playerCore.requestSeekIncr(5);
+        core.requestSeekIncr(5);
         break;
     case Qt::Key_Left:
-        playerCore.requestSeekIncr(-5);
+        core.requestSeekIncr(-5);
+        break;
+    case Qt::Key_Up:
+        //core.requestSeekIncr(60);
+        break;
+    case Qt::Key_Down:
+        //core.requestSeekIncr(-60);
         break;
     default:
         break;

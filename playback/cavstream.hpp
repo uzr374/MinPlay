@@ -5,6 +5,8 @@ extern "C"{
 #include <libavformat/avformat.h>
 }
 
+#include <string>
+
 class CAVStream final
 {
     AVCodecParameters* codecpar = nullptr;
@@ -15,6 +17,7 @@ class CAVStream final
     int64_t start_time = AV_NOPTS_VALUE;
     int64_t stream_duration = AV_NOPTS_VALUE;
     int index = -1;// In AVFormatContext
+    std::string title_str, lang_str;
 
     void copyFrom(const CAVStream& rhs);
 
@@ -42,6 +45,13 @@ public:
     int64_t startTime() const;
     int64_t duration() const;
     int idx() const;
+    std::string titleStr() const;
+    std::string langStr() const;
+    int width() const;
+    int height() const;
+    int sampleRate() const;
+    int channelCount() const;
+    std::string chLayoutStr() const;
 };
 
 #endif // CAVSTREAM_HPP

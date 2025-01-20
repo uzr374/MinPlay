@@ -53,7 +53,7 @@ MainWindow::MainWindow(QWidget *parent)
     addDockWidget(Qt::RightDockWidgetArea, plDock);
 
     core = new PlayerCore(this, vWidget, logger);
-    auto app_evt_filter = new AppEventFilter(this);
+    auto app_evt_filter = new AppEventFilter(*core, this);
     QApplication::instance()->installEventFilter(app_evt_filter);
 
     setGeometry(getDefaultWindowGeometry(this->screen()));
@@ -74,6 +74,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(core, &PlayerCore::setControlsActive, sBar, &StatusBar::setActive);
     connect(m_menus, &MenuBarMenu::submitURLs, plList, &Playlist::appendURLs);
     connect(plList, &Playlist::openURL, core, &PlayerCore::openURL);
+    connect(core, &PlayerCore::sigUpdateStreams, m_menus, &MenuBarMenu::updateStreams);
 }
 
 MainWindow::~MainWindow() {

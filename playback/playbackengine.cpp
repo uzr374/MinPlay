@@ -1,6 +1,7 @@
 #include "playbackengine.hpp"
 #include "avframeview.hpp"
 #include "cavchannellayout.hpp"
+#include "formatcontext.hpp"
 #include "packetqueue.hpp"
 
 #include <QApplication>
@@ -69,7 +70,7 @@ extern "C"{
 #define VIDEO_PICTURE_QUEUE_SIZE 3
 #define SUBPICTURE_QUEUE_SIZE 16
 #define SAMPLE_QUEUE_SIZE 9
-#define FRAME_QUEUE_SIZE FFMAX(SAMPLE_QUEUE_SIZE, FFMAX(VIDEO_PICTURE_QUEUE_SIZE, SUBPICTURE_QUEUE_SIZE))
+#define FRAME_QUEUE_SIZE std::max(SAMPLE_QUEUE_SIZE, std::max(VIDEO_PICTURE_QUEUE_SIZE, SUBPICTURE_QUEUE_SIZE))
 
 typedef struct AudioParams {
     int freq = 0;
@@ -145,6 +146,16 @@ typedef struct Decoder {
 
 struct VideoState {
     SDLRenderer* sdl_renderer = nullptr;
+    std::mutex render_mutex; /*guards each iteration of the refresh loop*/
+    double stream_duration = 0.0;
+
+    std::mutex seek_mutex;
+    SeekInfo seek_info;
+    bool seek_req = false;
+
+    std::mutex streams_mutex;
+    bool streams_updated = false;
+    std::vector<CAVStream> streams;
 
     std::thread read_thr;
     const AVInputFormat *iformat = nullptr;
@@ -153,12 +164,8 @@ struct VideoState {
     bool paused = false;
     bool last_paused = false;
     bool queue_attachments_req = false;
-    bool seek_req = false;
-    int seek_flags = 0;
-    int64_t seek_pos = 0;
-    int64_t seek_rel = 0;
+
     int read_pause_return = 0;
-    //AVFormatContext *ic = nullptr;
     bool realtime = false;
 
     Clock audclk;
@@ -734,20 +741,6 @@ static void check_external_clock_speed(VideoState *is) {
         double speed = is->extclk.speed;
         if (speed != 1.0)
             set_clock_speed(&is->extclk, speed + EXTERNAL_CLOCK_SPEED_STEP * (1.0 - speed) / fabs(1.0 - speed));
-    }
-}
-
-/* seek in the stream */
-static void stream_seek(VideoState *is, int64_t pos, int64_t rel, int by_bytes)
-{
-    if (!is->seek_req) {
-        is->seek_pos = pos;
-        is->seek_rel = rel;
-        is->seek_flags &= ~AVSEEK_FLAG_BYTE;
-        if (by_bytes)
-            is->seek_flags |= AVSEEK_FLAG_BYTE;
-        is->seek_req = 1;
-        is->continue_read_thread.notify_one();
     }
 }
 
@@ -1783,6 +1776,42 @@ static int read_thread(VideoState *is)
     AVDictionary* format_opts = nullptr;
     std::mutex wait_mutex;
     bool seek_by_bytes = false;
+    int seek_flags = 0;
+    int64_t seek_pos = 0;
+    int64_t seek_rel = 0;
+
+    auto set_seek = [&seek_flags, &seek_pos, &seek_rel](int64_t pos, int64_t rel, bool by_bytes){
+        if(by_bytes)
+            seek_flags = AVSEEK_FLAG_BYTE;
+        seek_rel = rel;
+        seek_pos = pos;
+    };
+
+    auto seek_incr = [&](double incr){
+        if (seek_by_bytes) {
+            int64_t pos = -1;
+            if (pos < 0 && is->video_stream >= 0)
+                pos = frame_queue_last_pos(&is->pictq);
+            if (pos < 0 && is->audio_stream >= 0)
+                pos = frame_queue_last_pos(&is->sampq);
+            if (pos < 0)
+                pos = avio_tell(ic->pb);
+            if (ic->bit_rate)
+                incr *= ic->bit_rate / 8.0;
+            else
+                incr *= 180000.0;
+            pos += incr;
+            set_seek(pos, incr, true);
+        } else {
+            auto pos = get_master_clock(is);
+            if (isnan(pos))
+                pos = (double)seek_pos / AV_TIME_BASE;
+            pos += incr;
+            if (ic->start_time != AV_NOPTS_VALUE && pos < ic->start_time / (double)AV_TIME_BASE)
+                pos = ic->start_time / (double)AV_TIME_BASE;
+            set_seek((int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), false);
+        }
+    };
 
     memset(st_index, -1, sizeof(st_index));
     is->eof = 0;
@@ -1806,15 +1835,10 @@ static int read_thread(VideoState *is)
 
     ic->flags |= AVFMT_FLAG_GENPTS;
 
-    if (true) {
-        err = avformat_find_stream_info(ic, nullptr);
-
-        if (err < 0) {
-            av_log(NULL, AV_LOG_WARNING,
-                   "%s: could not find codec parameters\n", is->filename);
-            ret = -1;
-            goto fail;
-        }
+    err = avformat_find_stream_info(ic, nullptr);
+    if (err < 0) {
+        av_log(NULL, AV_LOG_WARNING,
+               "%s: could not find codec parameters\n", is->filename);
     }
 
     if (ic->pb)
@@ -1830,11 +1854,18 @@ static int read_thread(VideoState *is)
     //     window_title = av_asprintf("%s - %s", t->value, input_filename);
 
     is->realtime = is_realtime(ic);
+    is->render_mutex.lock();
+    is->stream_duration = ic->duration == AV_NOPTS_VALUE ? 0.0 : ic->duration / (double)AV_TIME_BASE;
+    is->render_mutex.unlock();
 
+    is->streams_mutex.lock();
+    is->streams.reserve(ic->nb_streams);
     for (i = 0; i < ic->nb_streams; i++) {
-        AVStream *st = ic->streams[i];
-        st->discard = AVDISCARD_ALL;
+        ic->streams[i]->discard = AVDISCARD_ALL;
+        is->streams.push_back(CAVStream(ic, i));
     }
+    is->streams_updated = true;
+    is->streams_mutex.unlock();
 
     st_index[AVMEDIA_TYPE_VIDEO] =
             av_find_best_stream(ic, AVMEDIA_TYPE_VIDEO,
@@ -1894,36 +1925,116 @@ static int read_thread(VideoState *is)
             continue;
         }
 
+        {
+            std::scoped_lock seek_lock(is->seek_mutex);
         if (is->seek_req) {
-            int64_t seek_target = is->seek_pos;
-            int64_t seek_min    = is->seek_rel > 0 ? seek_target - is->seek_rel + 2: INT64_MIN;
-            int64_t seek_max    = is->seek_rel < 0 ? seek_target - is->seek_rel - 2: INT64_MAX;
-            // FIXME the +-2 is due to rounding being not done in the correct direction in generation
-            //      of the seek_pos/seek_rel variables
-
-            ret = avformat_seek_file(ic, -1, seek_min, seek_target, seek_max, is->seek_flags);
-            if (ret < 0) {
-                av_log(NULL, AV_LOG_ERROR,
-                       "%s: error while seeking\n", ic->url);
-            } else {
-                if (is->audio_stream >= 0)
-                    is->audioq.flush();
-                if (is->subtitle_stream >= 0)
-                    is->subtitleq.flush();
-                if (is->video_stream >= 0)
-                    is->videoq.flush();
-                if (is->seek_flags & AVSEEK_FLAG_BYTE) {
-                    set_clock(&is->extclk, NAN, 0);
-                } else {
-                    set_clock(&is->extclk, seek_target / (double)AV_TIME_BASE, 0);
+            is->seek_req = false;
+                std::scoped_lock rlck(is->render_mutex);
+                bool seek_in_stream = false;
+                const bool unseekable = (ic->flags & AVFMTCTX_UNSEEKABLE);
+                const auto info = is->seek_info;
+                switch(info.type){
+                case SeekInfo::SEEK_PERCENT:
+                {
+                    const auto pcent = info.percent;
+                    if (seek_by_bytes || ic->duration <= 0) {
+                        const uint64_t size =  avio_size(ic->pb);
+                        set_seek(size*pcent, 0, true);
+                    } else {
+                        int64_t ts;
+                        int ns, hh, mm, ss;
+                        int tns, thh, tmm, tss;
+                        tns  = ic->duration / 1000000LL;
+                        thh  = tns / 3600;
+                        tmm  = (tns % 3600) / 60;
+                        tss  = (tns % 60);
+                        ns   = pcent * tns;
+                        hh   = ns / 3600;
+                        mm   = (ns % 3600) / 60;
+                        ss   = (ns % 60);
+                        av_log(NULL, AV_LOG_INFO,
+                               "Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)", pcent*100,
+                               hh, mm, ss, thh, tmm, tss);
+                        ts = pcent * ic->duration;
+                        if (ic->start_time != AV_NOPTS_VALUE)
+                            ts += ic->start_time;
+                        set_seek(ts, 0, false);
+                    }
+                    seek_in_stream = !unseekable;
                 }
-            }
-            is->seek_req = 0;
-            is->queue_attachments_req = 1;
-            is->eof = 0;
-            if (is->paused)
-                step_to_next_frame(is);
+                    break;
+                case SeekInfo::SEEK_INCREMENT:
+                {
+                    seek_incr(info.increment);
+                    seek_in_stream = !unseekable;
+                }
+                    break;
+                case SeekInfo::SEEK_CHAPTER:
+                {
+                    const auto ch_incr = info.chapter_incr;
+                    if(ic->nb_chapters > 1){
+                        const int64_t pos = get_master_clock(is) * AV_TIME_BASE;
+
+                        int i = 0;
+                        /* find the current chapter */
+                        for (i = 0; i < ic->nb_chapters; i++) {
+                            const AVChapter *ch = ic->chapters[i];
+                            if (av_compare_ts(pos, AV_TIME_BASE_Q, ch->start, ch->time_base) < 0) {
+                                i--;
+                                break;
+                            }
+                        }
+
+                        i += ch_incr;
+                        i = std::max(i, 0);
+                        if (i < ic->nb_chapters){
+                            av_log(NULL, AV_LOG_VERBOSE, "Seeking to chapter %d.\n", i);
+                            set_seek(av_rescale_q(ic->chapters[i]->start, ic->chapters[i]->time_base,
+                                                         AV_TIME_BASE_Q), 0, false);
+                        }
+                    } else{
+                        seek_incr(ch_incr * 600.0);
+                    }
+                    seek_in_stream = !unseekable;
+                }
+                    break;
+                case SeekInfo::SEEK_STREAM_SWITCH:
+                    break;
+                default:
+                    break;
+                }
+
+                if(seek_in_stream){
+                    const int64_t seek_target = seek_pos;
+                    const int64_t seek_min    = seek_rel > 0 ? seek_target - seek_rel + 2: INT64_MIN;
+                    const int64_t seek_max    = seek_rel < 0 ? seek_target - seek_rel - 2: INT64_MAX;
+                    // FIXME the +-2 is due to rounding being not done in the correct direction in generation
+                    //      of the seek_pos/seek_rel variables
+
+                    ret = avformat_seek_file(ic, -1, seek_min, seek_target, seek_max, seek_flags);
+                    if (ret < 0) {
+                        av_log(NULL, AV_LOG_ERROR,
+                               "%s: error while seeking\n", ic->url);
+                    } else {
+                        if (is->audio_stream >= 0)
+                            is->audioq.flush();
+                        if (is->subtitle_stream >= 0)
+                            is->subtitleq.flush();
+                        if (is->video_stream >= 0)
+                            is->videoq.flush();
+                        if (seek_flags & AVSEEK_FLAG_BYTE) {
+                            set_clock(&is->extclk, NAN, 0);
+                        } else {
+                            set_clock(&is->extclk, seek_target / (double)AV_TIME_BASE, 0);
+                        }
+                    }
+
+                    is->queue_attachments_req = true;
+                    is->eof = 0;
+                }
         }
+        }
+
         if (is->queue_attachments_req) {
             if (is->video_st && is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC) {
                 CAVPacket pkt;
@@ -2175,256 +2286,34 @@ static double refresh_video(VideoState* ctx){
     return remaining_time;
 }
 
+static void check_playback_errors(VideoState* ctx){
+
+}
+
 static double playback_loop(VideoState* ctx){
     const auto audio_remaining_time = refresh_audio(ctx);
     const auto video_remaining_time = refresh_video(ctx);
-    //check for potential errors here
+    check_playback_errors(ctx);
+
     return std::min(audio_remaining_time, video_remaining_time);
 }
 
-static void seek_chapter(VideoState *is, int incr, AVFormatContext* ic)
-{
-    int64_t pos = get_master_clock(is) * AV_TIME_BASE;
-    int i;
-
-    if (!ic->nb_chapters)
-        return;
-
-    /* find the current chapter */
-    for (i = 0; i < ic->nb_chapters; i++) {
-        const AVChapter *ch = ic->chapters[i];
-        if (av_compare_ts(pos, AV_TIME_BASE_Q, ch->start, ch->time_base) < 0) {
-            i--;
-            break;
-        }
-    }
-
-    i += incr;
-    i = FFMAX(i, 0);
-    if (i >= ic->nb_chapters)
-        return;
-
-    av_log(NULL, AV_LOG_VERBOSE, "Seeking to chapter %d.\n", i);
-    stream_seek(is, av_rescale_q(ic->chapters[i]->start, ic->chapters[i]->time_base,
-                                 AV_TIME_BASE_Q), 0, 0);
-}
-
-// /* handle an event sent by the GUI */
-// static void event_loop(VideoState *cur_stream)
-// {
-//     SDL_Event event;
-//     double incr, pos, frac;
-
-//     for (;;) {
-//         double x;
-//         refresh_loop_wait_event(cur_stream, &event);
-//         switch (event.type) {
-//         case SDL_KEYDOWN:
-//             if (exit_on_keydown || event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_q) {
-//                 do_exit(cur_stream);
-//                 break;
-//             }
-//             // If we don't yet have a window, skip all key events, because read_thread might still be initializing...
-//             if (!cur_stream->width)
-//                 continue;
-//             switch (event.key.keysym.sym) {
-//             case SDLK_f:
-//                 toggle_full_screen(cur_stream);
-//                 cur_stream->force_refresh = 1;
-//                 break;
-//             case SDLK_p:
-//             case SDLK_SPACE:
-//                 toggle_pause(cur_stream);
-//                 break;
-//             case SDLK_m:
-//                 toggle_mute(cur_stream);
-//                 break;
-//             case SDLK_KP_MULTIPLY:
-//             case SDLK_0:
-//                 update_volume(cur_stream, 1, SDL_VOLUME_STEP);
-//                 break;
-//             case SDLK_KP_DIVIDE:
-//             case SDLK_9:
-//                 update_volume(cur_stream, -1, SDL_VOLUME_STEP);
-//                 break;
-//             case SDLK_s: // S: Step to next frame
-//                 step_to_next_frame(cur_stream);
-//                 break;
-//             case SDLK_a:
-//                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_AUDIO);
-//                 break;
-//             case SDLK_v:
-//                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_VIDEO);
-//                 break;
-//             case SDLK_c:
-//                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_VIDEO);
-//                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_AUDIO);
-//                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_SUBTITLE);
-//                 break;
-//             case SDLK_t:
-//                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_SUBTITLE);
-//                 break;
-//             case SDLK_w:
-//                 if (cur_stream->show_mode == SHOW_MODE_VIDEO && cur_stream->vfilter_idx < nb_vfilters - 1) {
-//                     if (++cur_stream->vfilter_idx >= nb_vfilters)
-//                         cur_stream->vfilter_idx = 0;
-//                 } else {
-//                     cur_stream->vfilter_idx = 0;
-//                     toggle_audio_display(cur_stream);
-//                 }
-//                 break;
-//             case SDLK_PAGEUP:
-//                 if (cur_stream->ic->nb_chapters <= 1) {
-//                     incr = 600.0;
-//                     goto do_seek;
-//                 }
-//                 seek_chapter(cur_stream, 1);
-//                 break;
-//             case SDLK_PAGEDOWN:
-//                 if (cur_stream->ic->nb_chapters <= 1) {
-//                     incr = -600.0;
-//                     goto do_seek;
-//                 }
-//                 seek_chapter(cur_stream, -1);
-//                 break;
-//             case SDLK_LEFT:
-//                 incr = seek_interval ? -seek_interval : -10.0;
-//                 goto do_seek;
-//             case SDLK_RIGHT:
-//                 incr = seek_interval ? seek_interval : 10.0;
-//                 goto do_seek;
-//             case SDLK_UP:
-//                 incr = 60.0;
-//                 goto do_seek;
-//             case SDLK_DOWN:
-//                 incr = -60.0;
-//             do_seek:
-//                 if (seek_by_bytes) {
-//                     pos = -1;
-//                     if (pos < 0 && cur_stream->video_stream >= 0)
-//                         pos = frame_queue_last_pos(&cur_stream->pictq);
-//                     if (pos < 0 && cur_stream->audio_stream >= 0)
-//                         pos = frame_queue_last_pos(&cur_stream->sampq);
-//                     if (pos < 0)
-//                         pos = avio_tell(cur_stream->ic->pb);
-//                     if (cur_stream->ic->bit_rate)
-//                         incr *= cur_stream->ic->bit_rate / 8.0;
-//                     else
-//                         incr *= 180000.0;
-//                     pos += incr;
-//                     stream_seek(cur_stream, pos, incr, 1);
-//                 } else {
-//                     pos = get_master_clock(cur_stream);
-//                     if (isnan(pos))
-//                         pos = (double)cur_stream->seek_pos / AV_TIME_BASE;
-//                     pos += incr;
-//                     if (cur_stream->ic->start_time != AV_NOPTS_VALUE && pos < cur_stream->ic->start_time / (double)AV_TIME_BASE)
-//                         pos = cur_stream->ic->start_time / (double)AV_TIME_BASE;
-//                     stream_seek(cur_stream, (int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), 0);
-//                 }
-//                 break;
-//             default:
-//                 break;
-//             }
-//             break;
-//         case SDL_MOUSEBUTTONDOWN:
-//             if (exit_on_mousedown) {
-//                 do_exit(cur_stream);
-//                 break;
-//             }
-//             if (event.button.button == SDL_BUTTON_LEFT) {
-//                 static int64_t last_mouse_left_click = 0;
-//                 if (av_gettime_relative() - last_mouse_left_click <= 500000) {
-//                     toggle_full_screen(cur_stream);
-//                     cur_stream->force_refresh = 1;
-//                     last_mouse_left_click = 0;
-//                 } else {
-//                     last_mouse_left_click = av_gettime_relative();
-//                 }
-//             }
-//         case SDL_MOUSEMOTION:
-//             if (cursor_hidden) {
-//                 SDL_ShowCursor(1);
-//                 cursor_hidden = 0;
-//             }
-//             cursor_last_shown = av_gettime_relative();
-//             if (event.type == SDL_MOUSEBUTTONDOWN) {
-//                 if (event.button.button != SDL_BUTTON_RIGHT)
-//                     break;
-//                 x = event.button.x;
-//             } else {
-//                 if (!(event.motion.state & SDL_BUTTON_RMASK))
-//                     break;
-//                 x = event.motion.x;
-//             }
-//             if (seek_by_bytes || cur_stream->ic->duration <= 0) {
-//                 uint64_t size =  avio_size(cur_stream->ic->pb);
-//                 stream_seek(cur_stream, size*x/cur_stream->width, 0, 1);
-//             } else {
-//                 int64_t ts;
-//                 int ns, hh, mm, ss;
-//                 int tns, thh, tmm, tss;
-//                 tns  = cur_stream->ic->duration / 1000000LL;
-//                 thh  = tns / 3600;
-//                 tmm  = (tns % 3600) / 60;
-//                 tss  = (tns % 60);
-//                 frac = x / cur_stream->width;
-//                 ns   = frac * tns;
-//                 hh   = ns / 3600;
-//                 mm   = (ns % 3600) / 60;
-//                 ss   = (ns % 60);
-//                 av_log(NULL, AV_LOG_INFO,
-//                        "Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)       \n", frac*100,
-//                        hh, mm, ss, thh, tmm, tss);
-//                 ts = frac * cur_stream->ic->duration;
-//                 if (cur_stream->ic->start_time != AV_NOPTS_VALUE)
-//                     ts += cur_stream->ic->start_time;
-//                 stream_seek(cur_stream, ts, 0, 0);
-//             }
-//             break;
-//         case SDL_WINDOWEVENT:
-//             switch (event.window.event) {
-//             case SDL_WINDOWEVENT_SIZE_CHANGED:
-//                 screen_width  = cur_stream->width  = event.window.data1;
-//                 screen_height = cur_stream->height = event.window.data2;
-//                 if (cur_stream->vis_texture) {
-//                     SDL_DestroyTexture(cur_stream->vis_texture);
-//                     cur_stream->vis_texture = NULL;
-//                 }
-//                 if (vk_renderer)
-//                     vk_renderer_resize(vk_renderer, screen_width, screen_height);
-//             case SDL_WINDOWEVENT_EXPOSED:
-//                 cur_stream->force_refresh = 1;
-//             }
-//             break;
-//         case SDL_QUIT:
-//         case FF_QUIT_EVENT:
-//             do_exit(cur_stream);
-//             break;
-//         default:
-//             break;
-//         }
-//     }
-// }
-
-
 void PlayerCore::openURL(QUrl url){
-    qDebug() << "Opening file";
     if(player_ctx){
-        stream_close(player_ctx);
+        stopPlayback();
     }
 
     if((player_ctx = stream_open(url.toString().toStdString().c_str(), video_renderer))){
-        refreshPlayback();
-        qDebug() << "Opened";
+        refreshPlayback(); //To start the refresh timer
+        setControlsActive(true);
     }
-
 }
 
 void PlayerCore::stopPlayback(){
     if(player_ctx){
         stream_close(player_ctx);
         player_ctx = nullptr;
+        setControlsActive(false);
     }
 }
 
@@ -2436,28 +2325,26 @@ void PlayerCore::resumePlayback(){
 
 }
 void PlayerCore::togglePause(){
-
-}
-
-bool PlayerCore::is_active() {
-
+    if(player_ctx){
+        std::scoped_lock lck(player_ctx->render_mutex);
+        toggle_pause(player_ctx);
+    }
 }
 
 void PlayerCore::requestSeekPercent(double percent){
-
+    if(player_ctx){
+        std::scoped_lock slck(player_ctx->seek_mutex);
+        player_ctx->seek_info = {.type = SeekInfo::SEEK_PERCENT, .percent = percent};
+        player_ctx->seek_req = true;
+    }
 }
 
 void PlayerCore::requestSeekIncr(double incr){
-
-}
-
-void PlayerCore::reportStreamDuration(double dur){
-    stream_duration = dur;
-}
-
-void PlayerCore::updateStreamPos(double pos){
-    cur_pos = pos;
-    emit updatePlaybackPos(pos, stream_duration);
+    if(player_ctx){
+        std::scoped_lock slck(player_ctx->seek_mutex);
+        player_ctx->seek_info = {.type = SeekInfo::SEEK_INCREMENT, .increment = incr};
+        player_ctx->seek_req = true;
+    }
 }
 
 void PlayerCore::log(const char* fmt, ...){
@@ -2468,20 +2355,10 @@ void PlayerCore::log(const char* fmt, ...){
     QMetaObject::invokeMethod(loggerW, &LoggerWidget::logMessage, msg);
 }
 
-static PlayerCore* plcore_inst = nullptr;
-
-PlayerCore& PlayerCore::instance() {
-    return *plcore_inst;
-}
-
 PlayerCore::PlayerCore(QObject* parent, VideoDisplayWidget* dw, LoggerWidget* lw): QObject(parent), video_dw(dw), loggerW(lw), refresh_timer(this){
-    plcore_inst = this;
-
     video_renderer = dw->getSDLRenderer();
 
     connect(&refresh_timer, &QTimer::timeout, this, &PlayerCore::refreshPlayback);
-    connect(this, &PlayerCore::sigReportStreamDuration, this, &PlayerCore::reportStreamDuration);
-    connect(this, &PlayerCore::sigUpdateStreamPos, this, &PlayerCore::updateStreamPos);
 }
 
 PlayerCore::~PlayerCore(){
@@ -2490,17 +2367,31 @@ PlayerCore::~PlayerCore(){
 
 void PlayerCore::refreshPlayback(){
     if(player_ctx){
+        std::scoped_lock lck(player_ctx->render_mutex);
         const auto remaining_time = playback_loop(player_ctx) * 1000;
-        //qDebug() << "Remaining time: " << remaining_time;
         refresh_timer.setInterval(static_cast<int>(remaining_time));
         if(!refresh_timer.isActive()){
             refresh_timer.setTimerType(Qt::PreciseTimer);
             refresh_timer.start();
         }
-
+        updateGUI();
     } else{
         refresh_timer.stop();
     }
 }
 
+void PlayerCore::handleStreamsUpdate(){
+    std::scoped_lock slck(player_ctx->streams_mutex);
+    if(player_ctx->streams_updated){
+        player_ctx->streams_updated = false;
+        emit sigUpdateStreams(player_ctx->streams);
+    }
+}
 
+void PlayerCore::updateGUI(){
+    handleStreamsUpdate();
+    const auto pos = get_master_clock(player_ctx);
+    if(!std::isnan(pos)){
+        emit updatePlaybackPos(pos, player_ctx->stream_duration);
+    }
+}

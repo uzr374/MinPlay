@@ -7,10 +7,12 @@ class AppEventFilter : public QObject
 {
     Q_OBJECT
 
+    class PlayerCore& core;
+
     bool eventFilter(QObject* sender, QEvent* evt) override;
     void handleKeyEvent(class QKeyEvent* evt);
 public:
-    explicit AppEventFilter(QObject *parent = nullptr);
+    explicit AppEventFilter(PlayerCore& core, QObject *parent = nullptr);
 
 signals:
 };

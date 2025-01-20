@@ -1,6 +1,7 @@
 #include "cavstream.hpp"
 
 #include <stdexcept>
+#include <sstream>
 
 CAVStream::CAVStream(): codecpar(avcodec_parameters_alloc()) {
 
@@ -31,6 +32,23 @@ CAVStream::CAVStream(AVFormatContext* ctx, int stream_index): CAVStream(){
     time_base = st->time_base;
     start_time = st->start_time;
     stream_duration = st->duration;
+
+    const auto lang_tag = av_dict_get(st->metadata, "language", nullptr, 0);
+    if(lang_tag && lang_tag->value){
+        lang_str = lang_tag->value;
+    }
+
+    std::ostringstream ss;
+    if(!lang_str.empty())
+        ss << "[" << lang_str << "] ";
+
+    if(isVideo()){
+        ss << width() << "x" << height();
+    } else if(isAudio()){
+        ss << chLayoutStr() << ", " << sampleRate() << " Hz";
+    }
+
+    title_str = ss.str();
 }
 
 CAVStream::CAVStream(const CAVStream& rhs): CAVStream(){
@@ -72,6 +90,8 @@ void CAVStream::copyFrom(const CAVStream& rhs){
     start_time = rhs.startTime();
     stream_duration = rhs.duration();
     index = rhs.idx();
+    title_str = rhs.titleStr();
+    lang_str = rhs.langStr();
 }
 
 const AVCodec* CAVStream::getCodec() const{
@@ -94,3 +114,17 @@ AVMediaType CAVStream::type() const{return codecPar().codec_type;}
 int64_t CAVStream::startTime() const {return start_time;}
 int64_t CAVStream::duration() const{return stream_duration;}
 int CAVStream::idx() const{return index;}
+std::string CAVStream::titleStr() const{
+    return title_str;
+}
+std::string CAVStream::langStr() const{return lang_str;}
+int CAVStream::width() const{return codecpar->width;}
+int CAVStream::height() const{return codecpar->height;}
+int CAVStream::sampleRate() const{return codecpar->sample_rate;}
+int CAVStream::channelCount() const{return codecpar->ch_layout.nb_channels;}
+std::string CAVStream::chLayoutStr() const{
+    char buf[64]{};
+    av_channel_layout_describe(&codecpar->ch_layout, buf, sizeof(buf));
+    return std::string(buf);
+}
+
