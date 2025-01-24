@@ -72,6 +72,8 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         playback/formatcontext.hpp playback/formatcontext.cpp
         playback/avframeview.hpp playback/avframeview.cpp
         playback/packetqueue.hpp playback/packetqueue.cpp
+        playback/audiooutput.hpp playback/audiooutput.cpp
+        playback/audioresampler.hpp playback/audioresampler.cpp
 
 
 

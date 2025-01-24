@@ -39,3 +39,19 @@ bool CAVChannelLayout::copy(const CAVChannelLayout& src){
 }
 bool CAVChannelLayout::isNative() const{return ch_layout.order == AV_CHANNEL_ORDER_NATIVE;}
 
+bool CAVChannelLayout::operator!=(const AVChannelLayout& rhs){
+    return !(*this == rhs);
+}
+
+bool CAVChannelLayout::operator==(const AVChannelLayout& rhs){
+    return av_channel_layout_compare(&ch_layout, &rhs) == 0;
+}
+
+bool CAVChannelLayout::operator!=(const CAVChannelLayout& rhs){
+    return !(*this == rhs.ch_layout);
+}
+
+bool CAVChannelLayout::operator==(const CAVChannelLayout& rhs){
+    return *this == rhs.ch_layout;
+}
+
