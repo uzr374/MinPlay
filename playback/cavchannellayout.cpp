@@ -34,8 +34,7 @@ const AVChannelLayout& CAVChannelLayout::constAv() const{return ch_layout;}
 
 bool CAVChannelLayout::copy(const CAVChannelLayout& src){
     reset();
-    const auto res = av_channel_layout_copy(&ch_layout, &src.ch_layout);
-    return res == 0;
+    return av_channel_layout_copy(&ch_layout, &src.ch_layout) == 0;
 }
 bool CAVChannelLayout::isNative() const{return ch_layout.order == AV_CHANNEL_ORDER_NATIVE;}
 
