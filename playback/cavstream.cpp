@@ -26,8 +26,11 @@ CAVStream::CAVStream(AVFormatContext* ctx, int stream_index): CAVStream(){
         } else{
             frame_rate = av_guess_frame_rate(ctx, st, nullptr);
         }
-        sample_ar = codecpar->sample_aspect_ratio;
+
+        sample_ar = st->sample_aspect_ratio;
         if(sample_ar.num == 0) sample_ar = {1, 1};//Just assume that the SAR is 1:1 if undefined
+    } else if(isAudio()){
+        no_timestamps = ctx->iformat->flags & AVFMT_NOTIMESTAMPS;
     }
     time_base = st->time_base;
     start_time = st->start_time;
@@ -110,6 +113,7 @@ bool CAVStream::isAttachedPic() const{return is_attached_pic;}
 bool CAVStream::isVideo() const{return type() == AVMEDIA_TYPE_VIDEO;}
 bool CAVStream::isAudio() const{return type() == AVMEDIA_TYPE_AUDIO;}
 bool CAVStream::isSub() const{return type() == AVMEDIA_TYPE_SUBTITLE;}
+bool CAVStream::noTimestamps() const {return no_timestamps;}
 AVMediaType CAVStream::type() const{return codecPar().codec_type;}
 int64_t CAVStream::startTime() const {return start_time;}
 int64_t CAVStream::duration() const{return stream_duration;}

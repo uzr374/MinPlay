@@ -6,10 +6,13 @@
 #include <condition_variable>
 #include <atomic>
 
+#include <QtGlobal>
+
 #include "cavpacket.hpp"
 
 class PacketQueue
 {
+    Q_DISABLE_COPY_MOVE(PacketQueue);
 private:
     std::queue<CAVPacket> pkt_buf;
     double duration_s = 0.0;
@@ -31,7 +34,7 @@ public:
     void abort();
     void start();
     /* return < 0 if aborted, 0 if no packet and > 0 if packet.  */
-    int get(AVPacket *dst, bool block, int *serial);
+    int get(CAVPacket& dst, bool block);
     /*returns the size, number of packets stored and duration of the queue*/
     std::tuple<int, int, double> getParams();
     int serial() const;

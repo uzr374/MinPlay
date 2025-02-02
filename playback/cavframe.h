@@ -13,6 +13,7 @@ private:
     int64_t pkt_pos = -1LL;
     double pts = 0.0, duration = 0.0;
     bool uploaded = false;
+    int ser = -1;
 
     void copyParams(const CAVFrame& src);
     const AVPixFmtDescriptor* getPixFmtDesc() const;
@@ -24,7 +25,7 @@ public:
 
     const AVFrame* constAv() const;
     AVFrame* av();
-    void unref();
+    void clear();
     bool ref(const CAVFrame& src);
     void move_ref(CAVFrame& src);
     CAVFrame& operator=(const CAVFrame&);
@@ -34,6 +35,9 @@ public:
     void setTimingInfo(double new_pts, double new_duration);
     bool create(int w, int h, AVPixelFormat fmt);
     bool ensureParams(int w, int h, AVPixelFormat fmt);
+
+    int serial() const;
+    void setSerial(int s);
 
     //Common fields
     const uint8_t* const constDataPlane(int idx) const;

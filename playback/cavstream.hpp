@@ -14,6 +14,7 @@ class CAVStream final
     AVRational sample_ar{};
     AVRational time_base{};
     bool is_attached_pic = false;
+    bool no_timestamps = false;
     int64_t start_time = AV_NOPTS_VALUE;
     int64_t stream_duration = AV_NOPTS_VALUE;
     int index = -1;// In AVFormatContext
@@ -41,6 +42,7 @@ public:
     bool isAudio() const;
     bool isSub() const;
     bool isAttachedPic() const;
+    bool noTimestamps() const;
     AVMediaType type() const;
     int64_t startTime() const;
     int64_t duration() const;

@@ -59,7 +59,7 @@ void PacketQueue::start()
 }
 
 /* return < 0 if aborted, 0 if no packet and > 0 if packet.  */
-int PacketQueue::get(AVPacket *dst, bool block, int *serial)
+int PacketQueue::get(CAVPacket& dst, bool block)
 {
     std::unique_lock lck(mutex);
 
@@ -76,8 +76,7 @@ int PacketQueue::get(AVPacket *dst, bool block, int *serial)
             --nb_packets;
             byte_size -= pkt.size();
             duration_s -= pkt.dur();
-            *serial = pkt.serial();
-            av_packet_move_ref(dst, pkt.av());
+            dst = std::move(pkt);
             ret = 1;
             break;
         } else if (!block) {

@@ -15,13 +15,13 @@ CAVFrame::CAVFrame(CAVFrame&& rhs) : CAVFrame(){
     move_ref(rhs);
 }
 CAVFrame& CAVFrame::operator=(const CAVFrame& rhs){
-    unref();
+    clear();
     copyParams(rhs);
     ref(rhs);
     return *this;
 }
 CAVFrame& CAVFrame::operator=(CAVFrame&& rhs){
-    unref();
+    clear();
     copyParams(rhs);
     move_ref(rhs);
     return *this;
@@ -32,10 +32,11 @@ void CAVFrame::copyParams(const CAVFrame& src){
     pts = src.pts;
     duration = src.duration;
     uploaded = false;
+    ser = src.serial();
 }
 
 bool CAVFrame::create(int w, int h, AVPixelFormat fmt){
-    unref();
+    clear();
     frame->format = fmt;
     frame->width = w;
     frame->height = h;
@@ -54,6 +55,9 @@ bool CAVFrame::ensureParams(int w, int h, AVPixelFormat fmt){
     return true;
 }
 
+int CAVFrame::serial() const{return ser;}
+void CAVFrame::setSerial(int s){ser = s;}
+
 void CAVFrame::setPktPos(int64_t pos){pkt_pos = pos;}
 void CAVFrame::setTimingInfo(double new_pts, double new_duration){pts = new_pts; duration = new_duration;}
 double CAVFrame::ts() const{return pts;}
@@ -63,7 +67,7 @@ AVRational CAVFrame::sampleAR() const{return frame->sample_aspect_ratio;}
 
 const AVFrame* CAVFrame::constAv() const{return frame;}
 AVFrame* CAVFrame::av() {return frame;}
-void CAVFrame::unref(){av_frame_unref(frame); pkt_pos = -1LL; pts = duration = 0.0; uploaded = false;}
+void CAVFrame::clear(){av_frame_unref(frame); pkt_pos = -1LL; pts = duration = 0.0; uploaded = false; ser = -1;}
 bool CAVFrame::ref(const CAVFrame& src){
     const auto res = av_frame_ref(frame, src.constAv());
     return res == 0;

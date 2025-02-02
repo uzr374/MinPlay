@@ -74,6 +74,13 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         playback/packetqueue.hpp playback/packetqueue.cpp
         playback/audiooutput.hpp playback/audiooutput.cpp
         playback/audioresampler.hpp playback/audioresampler.cpp
+        playback/framequeue.hpp
+        playback/decoder.hpp playback/decoder.cpp
+        playback/clock.hpp
+        playback/avtrack.hpp playback/avtrack.cpp
+        playback/audiotrack.hpp playback/audiotrack.cpp
+        playback/videotrack.hpp playback/videotrack.cpp
+        playback/subtrack.hpp playback/subtrack.cpp
 
 
 
