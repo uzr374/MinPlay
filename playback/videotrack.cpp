@@ -26,6 +26,8 @@ void VideoTrack::flush(){
     AVTrack::flush();
 }
 
+double VideoTrack::curPts() const{return clk.base();}
+
 int VideoTrack::framesAvailable(){return frame_pool.nb_remaining();}
 CAVFrame& VideoTrack::getLastPicture(){return *frame_pool.peek_last();}
 CAVFrame& VideoTrack::peekCurrentPicture(){return *frame_pool.peek();}
@@ -46,7 +48,7 @@ int VideoTrack::queue_picture(AVFrame *src_frame, double pts, double duration, i
     CAVFrame *vp;
 
     if (!(vp = frame_pool.peek_writable()))
-        return -1;
+        return AVERROR_EXIT;
 
     vp->setUploaded(false);
     vp->setTimingInfo(pts, duration);
@@ -297,7 +299,10 @@ void VideoTrack::run()
             const auto frame_rate = av_buffersink_get_frame_rate(filt_out);
             duration = (frame_rate.num && frame_rate.den ? av_q2d((AVRational){frame_rate.den, frame_rate.num}) : 0);
             pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
-            ret = queue_picture(frame, pts, duration, fd ? fd->pkt_pos : -1, dec.pkt_serial);
+
+            if(queue_picture(frame, pts, duration, fd ? fd->pkt_pos : -1, dec.pkt_serial))
+                break;
+
             av_frame_unref(frame);
             if (pkts.serial() != dec.pkt_serial)
                 break;

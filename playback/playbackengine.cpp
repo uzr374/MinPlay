@@ -73,51 +73,20 @@ struct VideoState {
 
 static void video_image_display(VideoState *is, const CAVFrame& vp)
 {
-    CSubtitle *sp = NULL;
-
     if (is->strack) {
-        /*if (frame_queue_nb_remaining(&is->subpq) > 0) {
-            sp = frame_queue_peek(&is->subpq);
+        if (is->strack->subsAvailable() > 0) {
+            auto sp = is->strack->peekCurrent();
 
-            if (vp->pts >= sp->pts + ((float) sp->sub.start_display_time / 1000)) {
-                if (!sp->uploaded) {
-                    uint8_t* pixels[4];
-                    int pitch[4];
-                    int i;
-                    if (!sp->width || !sp->height) {
-                        sp->width = vp->width;
-                        sp->height = vp->height;
+            if (vp.ts() >= sp->startTime()) {
+                if (!sp->isUploaded()) {
+                    if (!sp->width() || !sp->height()) {
+                        sp->ensureDimensions(vp.width(), vp.height());
                     }
-                    // if (realloc_texture(&is->sub_texture, SDL_PIXELFORMAT_ARGB8888, sp->width, sp->height, SDL_BLENDMODE_BLEND, 1) < 0)
-                    //     return;
-
-                    // for (i = 0; i < sp->sub.num_rects; i++) {
-                    //     AVSubtitleRect *sub_rect = sp->sub.rects[i];
-
-                    //     sub_rect->x = av_clip(sub_rect->x, 0, sp->width );
-                    //     sub_rect->y = av_clip(sub_rect->y, 0, sp->height);
-                    //     sub_rect->w = av_clip(sub_rect->w, 0, sp->width  - sub_rect->x);
-                    //     sub_rect->h = av_clip(sub_rect->h, 0, sp->height - sub_rect->y);
-
-                    //     is->sub_convert_ctx = sws_getCachedContext(is->sub_convert_ctx,
-                    //                                                sub_rect->w, sub_rect->h, AV_PIX_FMT_PAL8,
-                    //                                                sub_rect->w, sub_rect->h, AV_PIX_FMT_BGRA,
-                    //                                                0, NULL, NULL, NULL);
-                    //     if (!is->sub_convert_ctx) {
-                    //         av_log(NULL, AV_LOG_FATAL, "Cannot initialize the conversion context\n");
-                    //         return;
-                    //     }
-                    //     if (!SDL_LockTexture(is->sub_texture, (SDL_Rect *)sub_rect, (void **)pixels, pitch)) {
-                    //         sws_scale(is->sub_convert_ctx, (const uint8_t * const *)sub_rect->data, sub_rect->linesize,
-                    //                   0, sub_rect->h, pixels, pitch);
-                    //         SDL_UnlockTexture(is->sub_texture);
-                    //     }
-                    // }
-                    sp->uploaded = 1;
+                    //Upload the sp here
+                    sp->setUploaded(true);
                 }
-            } else
-                sp = NULL;
-        }*/
+            }
+        }
     }
 
     is->sdl_renderer->updateVideoTexture(AVFrameView(*vp.constAv()));
@@ -258,7 +227,6 @@ static double vp_duration(VideoState *is, const CAVFrame& vp, const CAVFrame& ne
 static double video_refresh(VideoState *is)
 {
     double remaining_time = REFRESH_RATE;
-    CSubtitle *sp = nullptr, *sp2 = nullptr;
     while(is->vtrack->framesAvailable() > 0){
         const auto& lastvp = is->vtrack->getLastPicture();
         const auto& vp = is->vtrack->peekCurrentPicture();
@@ -301,37 +269,17 @@ static double video_refresh(VideoState *is)
         }
 
         if (is->strack) {
-            /*while (frame_queue_nb_remaining(&is->subpq) > 0) {
-                    sp = frame_queue_peek(&is->subpq);
-
-                    if (frame_queue_nb_remaining(&is->subpq) > 1)
-                        sp2 = frame_queue_peek_next(&is->subpq);
-                    else
-                        sp2 = NULL;
-
-                    if (sp->serial != is->subtitleq.serial()
-                        || (is->vidclk.pts > (sp->pts + ((float) sp->sub.end_display_time / 1000)))
-                        || (sp2 && is->vidclk.pts > (sp2->pts + ((float) sp2->sub.start_display_time / 1000))))
-                    {
-                        if (sp->uploaded) {
-                            // int i;
-                            // for (i = 0; i < sp->sub.num_rects; i++) {
-                            //     AVSubtitleRect *sub_rect = sp->sub.rects[i];
-                            //     uint8_t *pixels;
-                            //     int pitch, j;
-
-                            //     if (!SDL_LockTexture(is->sub_texture, (SDL_Rect *)sub_rect, (void **)&pixels, &pitch)) {
-                            //         for (j = 0; j < sub_rect->h; j++, pixels += pitch)
-                            //             memset(pixels, 0, sub_rect->w << 2);
-                            //         SDL_UnlockTexture(is->sub_texture);
-                            //     }
-                            // }
-                        }
-                        frame_queue_next(&is->subpq);
-                    } else {
-                        break;
+            while (is->strack->subsAvailable() > 0) {
+                auto sp = is->strack->peekCurrent();
+                auto sp2 = is->strack->peekNext();
+                const auto ref_ts = is->vtrack->curPts();
+                if (sp->ser() != is->strack->serial() || (ref_ts > sp->endTime()) || (sp2 && ref_ts > sp2->startTime())) {
+                    if (sp->isUploaded()) {
+                            //Clear the sub texture here
                     }
-                }*/
+                    is->strack->nextSub();
+                } else {break;}
+            }
         }
 
         is->vtrack->nextFrame();

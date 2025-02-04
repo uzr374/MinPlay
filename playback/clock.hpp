@@ -49,6 +49,7 @@ public:
     double updatedAt() const {return last_updated;}
 
     void resetTime(){pts = last_updated = NAN;}
+    double base() const {return pts;}
 };
 
 #endif // CLOCK_HPP

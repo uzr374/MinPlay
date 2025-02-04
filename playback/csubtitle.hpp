@@ -9,7 +9,6 @@ extern "C"{
 
 class CSubtitle final
 {
-    Q_DISABLE_COPY(CSubtitle);
 private:
     AVSubtitle sub{};
     int sub_width = 0;
@@ -18,24 +17,28 @@ private:
     double sub_pts = 0.0;
     double sub_duration = 0.0;
     double start_time = 0.0, end_time = 0.0;
+    int serial = -1;
 
     void move_from(CSubtitle&& rhs);
+    void copyParams(const CSubtitle& from);
 public:
     CSubtitle();
     ~CSubtitle();
     CSubtitle(CSubtitle&& other);
     CSubtitle& operator=(CSubtitle&& other);
+    CSubtitle(const CSubtitle& other);
+    CSubtitle& operator=(const CSubtitle& other);
 
     void clear(){
         avsubtitle_free(&sub);
+        sub = {};
         sub_width = sub_height = 0;
-        sub_pts = sub_duration = 0.0;
+        sub_pts = sub_duration = start_time = end_time = 0.0;
+        serial = -1;
         uploaded = false;
     }
-    int width() const{
-        return sub_width;
-    }
 
+    int width() const{ return sub_width;}
     int height() const{return sub_height;}
     int format() const {return sub.format;}
     bool isUploaded() const{return uploaded;}
@@ -47,8 +50,10 @@ public:
     unsigned numRects() const{return sub.num_rects;}
     AVSubtitleRect** rects() const{return sub.rects;}
     const AVSubtitleRect& rectAt(int idx);
+    int ser() const{return serial;}
 
     void setUploaded(bool upl){uploaded = upl;}
+    void setSerial(int s) {serial = s;}
     void calcTimingInfo(){
         if(sub.pts != AV_NOPTS_VALUE){
             sub_pts = sub.pts/(double)AV_TIME_BASE;

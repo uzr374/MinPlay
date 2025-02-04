@@ -15,6 +15,11 @@ private:
 public:
     SubTrack(const CAVStream& st, std::condition_variable&);
     ~SubTrack();
+
+    CSubtitle* peekCurrent();
+    CSubtitle* peekNext();
+    int subsAvailable();
+    void nextSub();
 };
 
 #endif // SUBTRACK_HPP

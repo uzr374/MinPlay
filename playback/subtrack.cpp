@@ -12,35 +12,40 @@ SubTrack::~SubTrack(){
         dec.decoder_thr.join();
 }
 
-void SubTrack::run()
-{
-    CSubtitle *sp;
-    int got_subtitle;
-    double pts;
+void SubTrack::run() {
+    for (;;) {
+        auto sp = sub_pool.peek_writable();
+        if (!sp)
+            break;
+        AVSubtitle& sub = sp->av();
+        const auto got_subtitle = dec.decode_frame(nullptr, &sub);
+        if (got_subtitle < 0)
+            break;
+        if (got_subtitle) {
+            sp->ensureDimensions(dec.avctx->width, dec.avctx->height);
+            sp->setSerial(dec.pkt_serial);
+            sp->setUploaded(false);
 
-    // for (;;) {
-    //     if (!(sp = frame_queue_peek_writable(&is->subpq)))
-    //         return 0;
+            sub_pool.push();
+        }
+    }
+}
 
-    //     if ((got_subtitle = decoder_decode_frame(&is->subdec, NULL, &sp->sub)) < 0)
-    //         break;
+CSubtitle* SubTrack::peekCurrent(){
+    return sub_pool.peek();
+}
 
-    //     pts = 0;
+CSubtitle* SubTrack::peekNext(){
+    if (sub_pool.nb_remaining() > 1)
+        return sub_pool.peek_next();
+    return nullptr;
+}
 
-    //     if (got_subtitle && sp->sub.format == 0) {
-    //         if (sp->sub.pts != AV_NOPTS_VALUE)
-    //             pts = sp->sub.pts / (double)AV_TIME_BASE;
-    //         sp->pts = pts;
-    //         sp->serial = is->subdec.pkt_serial;
-    //         sp->width = is->subdec.avctx->width;
-    //         sp->height = is->subdec.avctx->height;
-    //         sp->uploaded = 0;
+int SubTrack::subsAvailable(){
+    return sub_pool.nb_remaining();
+}
 
-    //         /* now we can update the picture count */
-    //         frame_queue_push(&is->subpq);
-    //     } else if (got_subtitle) {
-    //         avsubtitle_free(&sp->sub);
-    //     }
-    // }
+void SubTrack::nextSub(){
+    sub_pool.next();
 }
 

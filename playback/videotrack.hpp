@@ -39,6 +39,7 @@ public:
 
     double getClockVal() const;
     double clockUpdateTime();
+    double curPts() const;
     void updateClock(double pts);
     void setPauseStatus(bool p);
 
