@@ -1,5 +1,4 @@
 #include "formatcontext.hpp"
-#include "playbackengine.hpp"
 
 #include <stdexcept>
 
@@ -19,7 +18,7 @@ static bool is_realtime(AVFormatContext *s)
 FormatContext::FormatContext(QString url, decltype(AVFormatContext::interrupt_callback.callback) int_cb, void* cb_opaque) : ic(avformat_alloc_context()) {
     ic->interrupt_callback.callback = int_cb;
     ic->interrupt_callback.opaque = cb_opaque;
-    ic->flags |= AVFMT_FLAG_GENPTS | AVFMT_FLAG_FAST_SEEK | AVFMT_FLAG_DISCARD_CORRUPT;
+    ic->flags |= AVFMT_FLAG_GENPTS | AVFMT_FLAG_DISCARD_CORRUPT;
     ic->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
     AVDictionary* format_opts = nullptr;
     av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
@@ -81,70 +80,117 @@ bool FormatContext::seek(const SeekInfo& info, double last_pts, int64_t last_pos
         last_seek_rel = rel;
     };
 
-    if(ic->ctx_flags & AVFMTCTX_UNSEEKABLE){
-        return true;//Only return false if avformat_seek_file() failed
-    }
-
-    switch(info.type){
-    case SeekInfo::SEEK_PERCENT:
-        if (seek_by_bytes || ic->duration <= 0) {
-            const int64_t byte_size = size();
-            if (byte_size > 0)
-                set_seek(byte_size * info.percent, 0);
-        } else {
-            const auto tns  = ic->duration / AV_TIME_BASE;
-            const int thh  = tns / 3600;
-            const int tmm  = (tns % 3600) / 60;
-            const int tss  = (tns % 60);
-            const double frac = info.percent;
-            const int ns   = frac * tns;
-            const int hh   = ns / 3600;
-            const int mm   = (ns % 3600) / 60;
-            const int ss   = (ns % 60);
-            const int64_t ts = frac * ic->duration + (ic->start_time == AV_NOPTS_VALUE ? 0LL : ic->start_time);
-            set_seek(ts, 0);
-        }
-        break;
-    case SeekInfo::SEEK_INCREMENT:
-    {
-        double incr = info.increment;
+    auto seek_incr = [&](double incr){
         if (seek_by_bytes) {
             int64_t pos = last_pos;
-            if (pos < 0 && ic->pb)
-                pos = avio_tell(ic->pb);
-            if (ic->bit_rate)
-                incr *= ic->bit_rate / 8.0;//get the byte size
+            if (pos < 0)
+                pos = bytePos();
+            if (bitrate())
+                incr *= bitrate() / 8.0;
             else
-                incr *= 180000.0;//not sure why
+                incr *= 180000.0;
             pos += incr;
             set_seek(pos, incr);
         } else {
-            double pos = last_pts;
+            auto pos = last_pts;
             if (isnan(pos))
                 pos = (double)last_seek_pos / AV_TIME_BASE;
             pos += incr;
-            if (ic->start_time != AV_NOPTS_VALUE && pos < ic->start_time / (double)AV_TIME_BASE)
-                pos = ic->start_time / (double)AV_TIME_BASE;
+            if (startTime() != AV_NOPTS_VALUE && pos < startTime() / (double)AV_TIME_BASE)
+                pos = startTime() / (double)AV_TIME_BASE;
             set_seek((int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE));
         }
+    };
+
+    bool seek_in_stream = false;
+    const bool unseekable = (ic->flags & AVFMTCTX_UNSEEKABLE);
+    if(unseekable && info.type != SeekInfo::SEEK_STREAM_SWITCH)
+        return false;
+    switch(info.type){
+    case SeekInfo::SEEK_PERCENT:
+    {
+        const auto pcent = info.percent;
+        if (seek_by_bytes || ic->duration <= 0) {
+            const uint64_t size =  avio_size(ic->pb);
+            set_seek(size*pcent, 0);
+        } else {
+            int64_t ts;
+            int ns, hh, mm, ss;
+            int tns, thh, tmm, tss;
+            tns  = ic->duration / 1000000LL;
+            thh  = tns / 3600;
+            tmm  = (tns % 3600) / 60;
+            tss  = (tns % 60);
+            ns   = pcent * tns;
+            hh   = ns / 3600;
+            mm   = (ns % 3600) / 60;
+            ss   = (ns % 60);
+            av_log(NULL, AV_LOG_INFO,
+                   "Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)", pcent*100,
+                   hh, mm, ss, thh, tmm, tss);
+            ts = pcent * ic->duration;
+            if (ic->start_time != AV_NOPTS_VALUE)
+                ts += ic->start_time;
+            set_seek(ts, 0);
+        }
+        seek_in_stream = !unseekable;
     }
     break;
+    case SeekInfo::SEEK_INCREMENT:
+    {
+        seek_incr(info.increment);
+        seek_in_stream = !unseekable;
+    }
+    break;
+    case SeekInfo::SEEK_CHAPTER:
+    {
+        const auto ch_incr = info.chapter_incr;
+        if(ic->nb_chapters > 1){
+            const int64_t pos = last_pts * AV_TIME_BASE;
+
+            int i = 0;
+            /* find the current chapter */
+            for (i = 0; i < ic->nb_chapters; i++) {
+                const AVChapter *ch = ic->chapters[i];
+                if (av_compare_ts(pos, AV_TIME_BASE_Q, ch->start, ch->time_base) < 0) {
+                    i--;
+                    break;
+                }
+            }
+
+            i = std::max(i + ch_incr, 0);
+            if (i < ic->nb_chapters){
+                av_log(NULL, AV_LOG_VERBOSE, "Seeking to chapter %d.\n", i);
+                set_seek(av_rescale_q(ic->chapters[i]->start, ic->chapters[i]->time_base,
+                                      AV_TIME_BASE_Q), 0);
+            }
+        } else{
+            seek_incr(ch_incr * 600.0);
+        }
+        seek_in_stream = !unseekable;
+    }
+    break;
+    case SeekInfo::SEEK_STREAM_SWITCH:
+        break;
     default:
-        return false;
+        break;
     }
 
-    /*Execute the seek*/
-    // FIXME the +-2 is due to rounding being not done in the correct direction in generation
-    //      of the seek_pos/seek_rel variables
-    const int64_t seek_target = last_seek_pos;
-    const int64_t seek_min    = last_seek_rel > 0 ? seek_target - last_seek_rel + 2: INT64_MIN;
-    const int64_t seek_max    = last_seek_rel < 0 ? seek_target - last_seek_rel - 2: INT64_MAX;
+    bool seek_succeeded = !seek_in_stream;
+    if(seek_in_stream){
+        /*Execute the seek*/
+        // FIXME the +-2 is due to rounding being not done in the correct direction in generation
+        //      of the seek_pos/seek_rel variables
+        const int64_t seek_target = last_seek_pos;
+        const int64_t seek_min    = last_seek_rel > 0 ? seek_target - last_seek_rel + 2: INT64_MIN;
+        const int64_t seek_max    = last_seek_rel < 0 ? seek_target - last_seek_rel - 2: INT64_MAX;
 
-    const auto seek_flags = seek_by_bytes ? AVSEEK_FLAG_BYTE : 0;
-    const auto seekRes = avformat_seek_file(ic, -1, seek_min, seek_target, seek_max, seek_flags);
-    const auto seek_succeeded = seekRes >= 0;
-    if(seek_succeeded)
-        eof = false;
+        const auto seek_flags = seek_by_bytes ? AVSEEK_FLAG_BYTE : 0;
+        const auto seekRes = avformat_seek_file(ic, -1, seek_min, seek_target, seek_max, seek_flags);
+        seek_succeeded = seekRes >= 0;
+        if(seek_succeeded)
+            eof = false;
+    }
 
     return seek_succeeded;
 }
@@ -153,8 +199,12 @@ int FormatContext::read(CAVPacket& into){
     const auto readRes = av_read_frame(ic, into.av());
     if (readRes < 0) {
         if ((readRes == AVERROR_EOF) || ic->pb && avio_feof(ic->pb)) {
-            eof = true;
-            return AVERROR_EOF;
+            if(!eof){
+                eof = true;
+                return AVERROR_EOF;
+            } else{
+                return AVERROR_BUG;
+            }
         }
         if (ic->pb && ic->pb->error) {
             return AVERROR_EXIT;
@@ -212,7 +262,8 @@ int FormatContext::setPaused(bool paused){
     return 0;
 }
 
-const std::vector<CAVStream>& FormatContext::streams() const{return cstreams;}
+CAVStream FormatContext::streamAt(int idx) const{return cstreams.at(idx);}
+std::vector<CAVStream> FormatContext::streams() const{return cstreams;}
 int FormatContext::streamCount() const{return ic->nb_streams;}
 bool FormatContext::isRealtime() const{return realtime;}
 bool FormatContext::byteSeek() const{return seek_by_bytes;}
@@ -223,3 +274,20 @@ int FormatContext::audioStIdx() const{return audio_idx;}
 int FormatContext::subStIdx() const{return sub_idx;}
 bool FormatContext::eofReached() const{return eof;}
 bool FormatContext::isRTSPorMMSH() const{return rtsp_or_mmsh;}
+int64_t FormatContext::bytePos() const{
+    int64_t pos = -1LL;
+    if(ic->pb)
+        pos = avio_tell(ic->pb);
+    return pos;
+}
+int64_t FormatContext::bitrate() const{return ic->bit_rate;}
+int64_t FormatContext::startTime() const{return ic->start_time;}
+CAVPacket FormatContext::attachedPic() const{
+    CAVPacket pkt;
+    if(video_idx >= 0 && streamAt(video_idx).isAttachedPic()){
+        auto st = ic->streams[video_idx];
+        av_packet_ref(pkt.av(), &st->attached_pic);
+        pkt.setTb(st->time_base);
+    }
+    return pkt;
+}

@@ -28,8 +28,6 @@ struct SeekInfo final {
 
 class FormatContext final
 {
-    Q_DISABLE_COPY_MOVE(FormatContext);
-
 private:
     AVFormatContext* ic = nullptr;
     std::vector<CAVStream> cstreams;
@@ -41,7 +39,7 @@ private:
     QString title;
 
 public:
-    FormatContext() = delete;
+    FormatContext() = default;
     FormatContext(QString url, decltype(AVFormatContext::interrupt_callback.callback) int_cb, void* cb_opaque);
     ~FormatContext();
 
@@ -54,14 +52,18 @@ public:
     bool seek(const SeekInfo& info, double last_pts, int64_t last_pos);
     bool setStreamEnabled(int idx, bool enabled);
     int read(CAVPacket& into);//Returns the error codes from av_read_frame()
-    const std::vector<CAVStream>& streams() const;
+    std::vector<CAVStream> streams() const;
+    CAVStream streamAt(int idx) const;
     int streamCount() const;
     int videoStIdx() const;
     int audioStIdx() const;
     int subStIdx() const;
     bool eofReached() const;
     int setPaused(bool paused);
-    inline AVFormatContext* av(){return ic;}; //must be eventually removed
+    int64_t bytePos() const;
+    int64_t bitrate() const;
+    int64_t startTime() const;
+    CAVPacket attachedPic() const;
 };
 
 #endif // FORMATCONTEXT_HPP

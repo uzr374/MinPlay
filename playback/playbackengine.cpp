@@ -48,49 +48,35 @@ struct VideoState {
 
     std::mutex render_mutex; /*guards each iteration of the refresh loop*/
     double stream_duration = 0.0;
+    bool streams_updated = false;
+    std::vector<CAVStream> streams;
 
     std::mutex seek_mutex;
     SeekInfo seek_info;
     bool seek_req = false;
-
-    std::mutex streams_mutex;
-    bool streams_updated = false;
-    std::vector<CAVStream> streams;
 
     std::thread read_thr;
     const AVInputFormat *iformat = nullptr;
     bool abort_request = false;
     bool force_refresh = false;
     bool paused = false;
-    bool last_paused = false;
     bool queue_attachments_req = false;
-    bool realtime = false;
+    int audio_stream = -1, video_stream = -1, subtitle_stream = -1;
+    int last_video_stream = -1, last_audio_stream = -1, last_subtitle_stream = -1;
 
     std::unique_ptr<AudioTrack> atrack;
     std::unique_ptr<VideoTrack> vtrack;
     std::unique_ptr<SubTrack> strack;
 
-    int audio_stream = -1;
-
     std::vector<uint8_t> audio_buf;
     bool muted = false;
 
     int frame_drops_late = 0;
-
-    int subtitle_stream = -1;
-
     double frame_timer = 0.0;
-
-    int video_stream = -1;
-
     double max_frame_duration = 0.0;      // maximum duration of a frame - above this, we consider the jump a timestamp discontinuity
-    SwsContext *sub_convert_ctx = nullptr;
-    bool eof = false;
 
     char *filename = nullptr;
     bool step = false;
-
-    int last_video_stream = -1, last_audio_stream = -1, last_subtitle_stream = -1;
 
     std::condition_variable continue_read_thread;
 };
@@ -161,12 +147,13 @@ static void ao_close(VideoState* ctx){
     request_ao_change(ctx, 0, 0);
 }
 
-static void stream_component_close(VideoState *is, int stream_index, AVFormatContext* ic)
+static void stream_component_close(VideoState *is, int stream_index, FormatContext& fmt_ctx)
 {
-    if (!ic || stream_index < 0 || stream_index >= ic->nb_streams)
+    if (stream_index < 0 || stream_index >= fmt_ctx.streamCount())
         return;
 
-    switch (ic->streams[stream_index]->codecpar->codec_type) {
+    auto st = fmt_ctx.streamAt(stream_index);
+    switch (st.codecPar().codec_type) {
     case AVMEDIA_TYPE_AUDIO:
         is->atrack = nullptr;
         is->audio_stream = -1;
@@ -184,7 +171,7 @@ static void stream_component_close(VideoState *is, int stream_index, AVFormatCon
         break;
     }
 
-    ic->streams[stream_index]->discard = AVDISCARD_ALL;
+    fmt_ctx.setStreamEnabled(stream_index, false);
 }
 
 static void stream_close(VideoState *is)
@@ -198,7 +185,6 @@ static void stream_close(VideoState *is)
         is->sdl_renderer->clearDisplay();
     }
 
-    sws_freeContext(is->sub_convert_ctx);
     av_free(is->filename);
 
     delete is;
@@ -296,10 +282,7 @@ static void video_refresh(VideoState *is, double *remaining_time)
 
     if (is->vtrack) {
     retry:
-        if (is->vtrack->framesAvailable() == 0) {
-            // nothing to do, no picture to display in the queue
-        } else {
-            double last_duration, duration, delay;
+        if (is->vtrack->framesAvailable() > 0) {
             /* dequeue the picture */
             const auto& lastvp = is->vtrack->getLastPicture();
             const auto& vp = is->vtrack->peekCurrentPicture();
@@ -316,8 +299,8 @@ static void video_refresh(VideoState *is, double *remaining_time)
                 goto display;
 
             /* compute nominal last_duration */
-            last_duration = vp_duration(is, lastvp, vp);
-            delay = compute_target_delay(last_duration, is);
+            const auto last_duration = vp_duration(is, lastvp, vp);
+            const auto delay = compute_target_delay(last_duration, is);
 
             time= av_gettime_relative()/1000000.0;
             if (time < is->frame_timer + delay) {
@@ -334,7 +317,7 @@ static void video_refresh(VideoState *is, double *remaining_time)
 
             if (is->vtrack->framesAvailable() > 1) {
                 const auto& nextvp = is->vtrack->peekNextPicture();
-                duration = vp_duration(is, vp, nextvp);
+                const auto duration = vp_duration(is, vp, nextvp);
                 if(!is->step && (is->atrack) && time > is->frame_timer + duration){
                     is->frame_drops_late++;
                     is->vtrack->nextFrame();
@@ -391,16 +374,14 @@ static void video_refresh(VideoState *is, double *remaining_time)
 }
 
 /* open a given stream. Return 0 if OK */
-static int stream_component_open(VideoState *is, int stream_index, AVFormatContext* ic)
+static int stream_component_open(VideoState *is, int stream_index, FormatContext& ic)
 {
-    if (stream_index < 0 || stream_index >= ic->nb_streams)
+    if (stream_index < 0 || stream_index >= ic.streamCount())
         return -1;
 
-    const CAVStream st(ic, stream_index);
+    const CAVStream st = ic.streamAt(stream_index);
     const auto& codecpar = st.codecPar();
 
-    is->eof = false;
-    ic->streams[stream_index]->discard = AVDISCARD_DEFAULT;
     switch (codecpar.codec_type) {
     case AVMEDIA_TYPE_AUDIO:
         is->last_audio_stream    = stream_index;
@@ -422,6 +403,8 @@ static int stream_component_open(VideoState *is, int stream_index, AVFormatConte
     default:
         break;
     }
+
+    ic.setStreamEnabled(stream_index, true);
 
     return 0;
 }
@@ -456,284 +439,93 @@ static bool is_realtime(AVFormatContext *s)
         || !strcmp(s->iformat->name, "rtsp")
         || !strcmp(s->iformat->name, "sdp")
         )
-        return 1;
+        return true;
 
     if(s->pb && (   !strncmp(s->url, "rtp:", 4)
                   || !strncmp(s->url, "udp:", 4)
                   )
         )
-        return 1;
-    return 0;
+        return true;
+    return false;
 }
 
 /* this thread gets the stream from the disk or the network */
-static int read_thread(VideoState *is)
+static void read_thread(VideoState *is)
 {
-    AVFormatContext *ic = NULL;
-    int err, i, ret;
-    int st_index[AVMEDIA_TYPE_NB];
-    const AVDictionaryEntry *t = nullptr;
-    AVDictionary* format_opts = nullptr;
     std::mutex wait_mutex;
-    bool seek_by_bytes = false;
-    int seek_flags = 0;
-    int64_t seek_pos = 0;
-    int64_t seek_rel = 0;
+    bool last_paused = false;
+    std::optional<FormatContext> ic;
+    int subsequent_err_count = 0;
 
-    auto set_seek = [&seek_flags, &seek_pos, &seek_rel](int64_t pos, int64_t rel, bool by_bytes){
-        if(by_bytes)
-            seek_flags = AVSEEK_FLAG_BYTE;
-        seek_rel = rel;
-        seek_pos = pos;
-    };
-
-    auto seek_incr = [&](double incr){
-        if (seek_by_bytes) {
-            int64_t pos = -1;
-            if (pos < 0 && is->vtrack)
-                pos = is->vtrack->lastPos();
-            if (pos < 0 && is->audio_stream >= 0)
-                pos = is->atrack->lastPos();
-            if (pos < 0)
-                pos = avio_tell(ic->pb);
-            if (ic->bit_rate)
-                incr *= ic->bit_rate / 8.0;
-            else
-                incr *= 180000.0;
-            pos += incr;
-            set_seek(pos, incr, true);
-        } else {
-            auto pos = get_master_clock(is);
-            if (isnan(pos))
-                pos = (double)seek_pos / AV_TIME_BASE;
-            pos += incr;
-            if (ic->start_time != AV_NOPTS_VALUE && pos < ic->start_time / (double)AV_TIME_BASE)
-                pos = ic->start_time / (double)AV_TIME_BASE;
-            set_seek((int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), false);
-        }
-    };
-
-    memset(st_index, -1, sizeof(st_index));
-    is->eof = 0;
-
-    ic = avformat_alloc_context();
-    if (!ic) {
-        av_log(NULL, AV_LOG_FATAL, "Could not allocate context.\n");
-        ret = AVERROR(ENOMEM);
-        goto fail;
+    try{
+    ic.emplace(is->filename, decode_interrupt_cb, is);
+    } catch(std::exception& ex){
+        qDebug() << "FormatContext: " << ex.what();
+    } catch(...){
+        qDebug() << "FormatContext: failed to initialize";
     }
-    ic->interrupt_callback.callback = decode_interrupt_cb;
-    ic->interrupt_callback.opaque = is;
-    av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
+    auto& fmt_ctx = *ic;
 
-    err = avformat_open_input(&ic, is->filename, is->iformat, &format_opts);
-    if (err < 0) {
-        qDebug() << "Failed to open URL: " << is->filename;
-        ret = -1;
-        goto fail;
-    }
-
-    ic->flags |= AVFMT_FLAG_GENPTS;
-
-    err = avformat_find_stream_info(ic, nullptr);
-    if (err < 0) {
-        av_log(NULL, AV_LOG_WARNING,
-               "%s: could not find codec parameters\n", is->filename);
-    }
-
-    if (ic->pb)
-        ic->pb->eof_reached = 0; // FIXME hack, ffplay maybe should not use avio_feof() to test for the end
-
-    seek_by_bytes = !(ic->iformat->flags & AVFMT_NO_BYTE_SEEK) &&
-                        !!(ic->iformat->flags & AVFMT_TS_DISCONT) &&
-                        strcmp("ogg", ic->iformat->name);
-
-    is->max_frame_duration = (ic->iformat->flags & AVFMT_TS_DISCONT) ? 10.0 : 3600.0;
-
-    // if (!window_title && (t = av_dict_get(ic->metadata, "title", NULL, 0)))
-    //     window_title = av_asprintf("%s - %s", t->value, input_filename);
-
-    is->realtime = is_realtime(ic);
-
-    is->streams_mutex.lock();
-    is->streams.reserve(ic->nb_streams);
-    for (i = 0; i < ic->nb_streams; i++) {
-        ic->streams[i]->discard = AVDISCARD_ALL;
-        is->streams.push_back(CAVStream(ic, i));
-    }
-    is->streams_updated = true;
-    is->streams_mutex.unlock();
-
-    st_index[AVMEDIA_TYPE_VIDEO] =
-            av_find_best_stream(ic, AVMEDIA_TYPE_VIDEO,
-                                st_index[AVMEDIA_TYPE_VIDEO], -1, NULL, 0);
-    st_index[AVMEDIA_TYPE_AUDIO] =
-            av_find_best_stream(ic, AVMEDIA_TYPE_AUDIO,
-                                st_index[AVMEDIA_TYPE_AUDIO],
-                                st_index[AVMEDIA_TYPE_VIDEO],
-                                NULL, 0);
-    st_index[AVMEDIA_TYPE_SUBTITLE] =
-            av_find_best_stream(ic, AVMEDIA_TYPE_SUBTITLE,
-                                st_index[AVMEDIA_TYPE_SUBTITLE],
-                                (st_index[AVMEDIA_TYPE_AUDIO] >= 0 ?
-                                     st_index[AVMEDIA_TYPE_AUDIO] :
-                                     st_index[AVMEDIA_TYPE_VIDEO]),
-                                NULL, 0);
+    is->max_frame_duration = fmt_ctx.maxFrameDuration();
+    const bool realtime = fmt_ctx.isRealtime();
 
     {
         std::scoped_lock lck(is->render_mutex);
-        is->stream_duration = ic->duration == AV_NOPTS_VALUE ? 0.0 : ic->duration / (double)AV_TIME_BASE;
-    /* open the streams */
-    if (st_index[AVMEDIA_TYPE_AUDIO] >= 0) {
-        stream_component_open(is, st_index[AVMEDIA_TYPE_AUDIO], ic);
+        is->streams = fmt_ctx.streams();
+        is->stream_duration = fmt_ctx.duration();
+        stream_component_open(is, fmt_ctx.audioStIdx(), fmt_ctx);
+        stream_component_open(is, fmt_ctx.videoStIdx(), fmt_ctx);
+        stream_component_open(is, fmt_ctx.subStIdx(), fmt_ctx);
     }
 
-    if (st_index[AVMEDIA_TYPE_VIDEO] >= 0) {
-        ret = stream_component_open(is, st_index[AVMEDIA_TYPE_VIDEO], ic);
-    }
-
-    if (st_index[AVMEDIA_TYPE_SUBTITLE] >= 0) {
-        stream_component_open(is, st_index[AVMEDIA_TYPE_SUBTITLE], ic);
-    }
-    }
-
+    bool cont = true;
     if (!is->atrack && !is->vtrack) {
         av_log(NULL, AV_LOG_FATAL, "Failed to open file '%s'\n",
                is->filename);
-        ret = -1;
-        goto fail;
+        cont = false;
     }
 
-    for (;;) {
-        if (is->abort_request)
-            break;
-        if (is->paused != is->last_paused) {
-            is->last_paused = is->paused;
-            if (is->paused)
-                av_read_pause(ic);
-            else
-                av_read_play(ic);
+    while (cont && !is->abort_request) {
+        if (is->paused != last_paused) {
+            last_paused = is->paused;
+            fmt_ctx.setPaused(last_paused);
         }
 
-        if (is->paused &&
-            (!strcmp(ic->iformat->name, "rtsp") ||
-             (ic->pb && !strncmp(ic->url, "mmsh:", 5)))) {
+        if (last_paused && fmt_ctx.isRTSPorMMSH()) {
             /* wait 10 ms to avoid trying to get another packet */
             /* XXX: horrible */
-            SDL_Delay(10);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
         {
             std::scoped_lock seek_lock(is->seek_mutex);
-        if (is->seek_req) {
-            is->seek_req = false;
-                std::scoped_lock rlck(is->render_mutex);
-                bool seek_in_stream = false;
-                const bool unseekable = (ic->flags & AVFMTCTX_UNSEEKABLE);
+            if (is->seek_req) {
+                is->seek_req = false;
                 const auto info = is->seek_info;
-                switch(info.type){
-                case SeekInfo::SEEK_PERCENT:
-                {
-                    const auto pcent = info.percent;
-                    if (seek_by_bytes || ic->duration <= 0) {
-                        const uint64_t size =  avio_size(ic->pb);
-                        set_seek(size*pcent, 0, true);
-                    } else {
-                        int64_t ts;
-                        int ns, hh, mm, ss;
-                        int tns, thh, tmm, tss;
-                        tns  = ic->duration / 1000000LL;
-                        thh  = tns / 3600;
-                        tmm  = (tns % 3600) / 60;
-                        tss  = (tns % 60);
-                        ns   = pcent * tns;
-                        hh   = ns / 3600;
-                        mm   = (ns % 3600) / 60;
-                        ss   = (ns % 60);
-                        av_log(NULL, AV_LOG_INFO,
-                               "Seek to %2.0f%% (%2d:%02d:%02d) of total duration (%2d:%02d:%02d)", pcent*100,
-                               hh, mm, ss, thh, tmm, tss);
-                        ts = pcent * ic->duration;
-                        if (ic->start_time != AV_NOPTS_VALUE)
-                            ts += ic->start_time;
-                        set_seek(ts, 0, false);
-                    }
-                    seek_in_stream = !unseekable;
-                }
-                    break;
-                case SeekInfo::SEEK_INCREMENT:
-                {
-                    seek_incr(info.increment);
-                    seek_in_stream = !unseekable;
-                }
-                    break;
-                case SeekInfo::SEEK_CHAPTER:
-                {
-                    const auto ch_incr = info.chapter_incr;
-                    if(ic->nb_chapters > 1){
-                        const int64_t pos = get_master_clock(is) * AV_TIME_BASE;
+                is->seek_info = {};
+                std::scoped_lock rlck(is->render_mutex);
+                int64_t pos = -1;
+                if (is->atrack)
+                    pos = is->atrack->lastPos();
+                if (pos < 0 && is->vtrack)
+                    pos = is->vtrack->lastPos();
+                const auto last_pts = get_master_clock(is);
 
-                        int i = 0;
-                        /* find the current chapter */
-                        for (i = 0; i < ic->nb_chapters; i++) {
-                            const AVChapter *ch = ic->chapters[i];
-                            if (av_compare_ts(pos, AV_TIME_BASE_Q, ch->start, ch->time_base) < 0) {
-                                i--;
-                                break;
-                            }
-                        }
-
-                        i = std::max(i + ch_incr, 0);
-                        if (i < ic->nb_chapters){
-                            av_log(NULL, AV_LOG_VERBOSE, "Seeking to chapter %d.\n", i);
-                            set_seek(av_rescale_q(ic->chapters[i]->start, ic->chapters[i]->time_base,
-                                                         AV_TIME_BASE_Q), 0, false);
-                        }
-                    } else{
-                        seek_incr(ch_incr * 600.0);
-                    }
-                    seek_in_stream = !unseekable;
+                if(fmt_ctx.seek(info, last_pts, pos)){
+                    if(is->vtrack)
+                        is->vtrack->flush();
+                    if(is->atrack)
+                        is->atrack->flush();
+                    if(is->strack)
+                        is->strack->flush();
                 }
-                    break;
-                case SeekInfo::SEEK_STREAM_SWITCH:
-                    break;
-                default:
-                    break;
-                }
-
-                if(seek_in_stream){
-                    const int64_t seek_target = seek_pos;
-                    const int64_t seek_min    = seek_rel > 0 ? seek_target - seek_rel + 2: INT64_MIN;
-                    const int64_t seek_max    = seek_rel < 0 ? seek_target - seek_rel - 2: INT64_MAX;
-                    // FIXME the +-2 is due to rounding being not done in the correct direction in generation
-                    //      of the seek_pos/seek_rel variables
-
-                    ret = avformat_seek_file(ic, -1, seek_min, seek_target, seek_max, seek_flags);
-                    if (ret < 0) {
-                        av_log(NULL, AV_LOG_ERROR,
-                               "%s: error while seeking\n", ic->url);
-                    } else {
-                        if (is->atrack)
-                            is->atrack->flush();
-                        if (is->strack)
-                            is->strack->flush();
-                        if (is->vtrack)
-                            is->vtrack->flush();
-                    }
-
-                    is->queue_attachments_req = true;
-                    is->eof = 0;
-                }
-        }
+            }
         }
 
         if (is->queue_attachments_req) {
             if (is->vtrack && is->vtrack->isAttachedPic()) {
-                CAVPacket pkt;
-                if ((ret = av_packet_ref(pkt.av(), &ic->streams[is->video_stream]->attached_pic)) < 0)
-                    goto fail;
-                pkt.setTb(ic->streams[is->video_stream]->time_base);
+                CAVPacket pkt = fmt_ctx.attachedPic();
                 is->vtrack->putPacket(std::move(pkt));
                 is->vtrack->putFinalPacket(is->video_stream);
             }
@@ -741,66 +533,54 @@ static int read_thread(VideoState *is)
         }
 
         /* if the queue are full, no need to read more */
-        if (!is->realtime && demux_buffer_is_full(*is)) {
+        if (!realtime && demux_buffer_is_full(*is)) {
             /* wait 10 ms */
             std::unique_lock lck(wait_mutex);
             is->continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
             continue;
         }
-        // if (!is->paused &&
-        //     (!is->audio_st || (is->auddec.finished_serial == is->audioq.serial && frame_queue_nb_remaining(&is->sampq) == 0)) &&
-        //     (!is->video_st || (is->viddec.finished_serial == is->videoq.serial && frame_queue_nb_remaining(&is->pictq) == 0))) {
-        //     if (loop != 1 && (!loop || --loop)) {
-        //         stream_seek(is, start_time != AV_NOPTS_VALUE ? start_time : 0, 0, 0);
-        //     } else if (autoexit) {
-        //         ret = AVERROR_EOF;
-        //         goto fail;
-        //     }
-        // }
 
-        CAVPacket pkt;
-        ret = av_read_frame(ic, pkt.av());
-        if (ret < 0) {
-            if ((ret == AVERROR_EOF || avio_feof(ic->pb)) && !is->eof) {
-                if (is->vtrack)
-                    is->vtrack->putFinalPacket(is->video_stream);
-                if (is->atrack)
-                    is->atrack->putFinalPacket(is->audio_stream);
-                if (is->strack)
-                    is->strack->putFinalPacket(is->subtitle_stream);
-                is->eof = true;
-            }
-            if (ic->pb && ic->pb->error) {
-                break;
-            }
+        if(fmt_ctx.eofReached()){
             std::unique_lock lck(wait_mutex);
             is->continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
-            continue;
-        } else {
-            is->eof = false;
-        }
-
-        const auto pkt_st_index = pkt.streamIndex();
-        pkt.setTb(ic->streams[pkt_st_index]->time_base);
-        if (is->atrack && pkt_st_index == is->audio_stream) {
-            is->atrack->putPacket(std::move(pkt));
-        } else if (is->vtrack && pkt_st_index == is->video_stream
-                   && !is->vtrack->isAttachedPic()) {
-            is->vtrack->putPacket(std::move(pkt));
-        } else if (is->strack && pkt_st_index == is->subtitle_stream) {
-            is->strack->putPacket(std::move(pkt));
+        } else{
+            CAVPacket pkt;
+            const int ret = fmt_ctx.read(pkt);
+            if (ret < 0) {
+                if (ret == AVERROR_EOF) {
+                    if (is->vtrack)
+                        is->vtrack->putFinalPacket(is->video_stream);
+                    if (is->atrack)
+                        is->atrack->putFinalPacket(is->audio_stream);
+                    if (is->strack)
+                        is->strack->putFinalPacket(is->subtitle_stream);
+                } else if (ret == AVERROR_EXIT) {
+                    break;
+                }
+                ++subsequent_err_count;
+                if(subsequent_err_count > 1000){
+                    break;
+                }
+                std::unique_lock lck(wait_mutex);
+                is->continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
+            } else{
+                const auto pkt_st_index = pkt.streamIndex();
+                if (is->atrack && pkt_st_index == is->audio_stream) {
+                    is->atrack->putPacket(std::move(pkt));
+                } else if (is->vtrack && pkt_st_index == is->video_stream
+                           && !is->vtrack->isAttachedPic()) {
+                    is->vtrack->putPacket(std::move(pkt));
+                } else if (is->strack && pkt_st_index == is->subtitle_stream) {
+                   is->strack->putPacket(std::move(pkt));
+                }
+                subsequent_err_count = 0;
+            }
         }
     }
 
-fail:
-    /* close each stream */
-    stream_component_close(is, is->audio_stream, ic);
-    stream_component_close(is, is->video_stream, ic);
-    stream_component_close(is, is->subtitle_stream, ic);
-
-    avformat_close_input(&ic);
-
-    return 0;
+    stream_component_close(is, is->audio_stream, fmt_ctx);
+    stream_component_close(is, is->video_stream, fmt_ctx);
+    stream_component_close(is, is->subtitle_stream, fmt_ctx);
 }
 
 static VideoState *stream_open(const char *filename, SDLRenderer* renderer)
@@ -823,83 +603,6 @@ static VideoState *stream_open(const char *filename, SDLRenderer* renderer)
 fail:
     stream_close(is);
     return NULL;
-}
-
-static void stream_cycle_channel(VideoState *is, AVMediaType codec_type, AVFormatContext* ic)
-{
-    int start_index, stream_index;
-    int old_index;
-    AVStream *st;
-    AVProgram *p = NULL;
-    int nb_streams = ic->nb_streams;
-
-    if (codec_type == AVMEDIA_TYPE_VIDEO) {
-        start_index = is->last_video_stream;
-        old_index = is->video_stream;
-    } else if (codec_type == AVMEDIA_TYPE_AUDIO) {
-        start_index = is->last_audio_stream;
-        old_index = is->audio_stream;
-    } else {
-        start_index = is->last_subtitle_stream;
-        old_index = is->subtitle_stream;
-    }
-    stream_index = start_index;
-
-    if (codec_type != AVMEDIA_TYPE_VIDEO && is->video_stream != -1) {
-        p = av_find_program_from_stream(ic, NULL, is->video_stream);
-        if (p) {
-            nb_streams = p->nb_stream_indexes;
-            for (start_index = 0; start_index < nb_streams; start_index++)
-                if (p->stream_index[start_index] == stream_index)
-                    break;
-            if (start_index == nb_streams)
-                start_index = -1;
-            stream_index = start_index;
-        }
-    }
-
-    for (;;) {
-        if (++stream_index >= nb_streams)
-        {
-            if (codec_type == AVMEDIA_TYPE_SUBTITLE)
-            {
-                stream_index = -1;
-                is->last_subtitle_stream = -1;
-                goto the_end;
-            }
-            if (start_index == -1)
-                return;
-            stream_index = 0;
-        }
-        if (stream_index == start_index)
-            return;
-        st = ic->streams[p ? p->stream_index[stream_index] : stream_index];
-        if (st->codecpar->codec_type == codec_type) {
-            /* check that parameters are OK */
-            switch (codec_type) {
-            case AVMEDIA_TYPE_AUDIO:
-                if (st->codecpar->sample_rate != 0 &&
-                    st->codecpar->ch_layout.nb_channels != 0)
-                    goto the_end;
-                break;
-            case AVMEDIA_TYPE_VIDEO:
-            case AVMEDIA_TYPE_SUBTITLE:
-                goto the_end;
-            default:
-                break;
-            }
-        }
-    }
-the_end:
-    if (p && stream_index != -1)
-        stream_index = p->stream_index[stream_index];
-    av_log(NULL, AV_LOG_INFO, "Switch %s stream from #%d to #%d\n",
-           av_get_media_type_string(codec_type),
-           old_index,
-           stream_index);
-
-    stream_component_close(is, old_index, ic);
-    stream_component_open(is, stream_index, ic);
 }
 
 static double refresh_audio(VideoState* ctx){
@@ -1055,7 +758,6 @@ void PlayerCore::refreshPlayback(){
 }
 
 void PlayerCore::handleStreamsUpdate(){
-    std::scoped_lock slck(player_ctx->streams_mutex);
     if(player_ctx->streams_updated){
         player_ctx->streams_updated = false;
         emit sigUpdateStreams(player_ctx->streams);
