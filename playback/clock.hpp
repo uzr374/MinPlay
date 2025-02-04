@@ -7,6 +7,10 @@ extern "C"{
 
 #include <cmath>
 
+inline double gettime(){
+    return av_gettime_relative() / 1000000.0;
+}
+
 struct Clock final {
 private:
     double pts = NAN;
@@ -20,7 +24,7 @@ public:
         if (paused) {
             return pts;
         } else {
-            const double time_drift = av_gettime_relative() / 1000000.0 - last_updated;
+            const double time_drift = gettime() - last_updated;
             return pts + time_drift * speed;
         }
     }
@@ -28,7 +32,7 @@ public:
     void set(double pts)
     {
         this->pts = pts;
-        this->last_updated = av_gettime_relative() / 1000000.0;
+        this->last_updated = gettime();
     }
 
     void set_speed(double speed)

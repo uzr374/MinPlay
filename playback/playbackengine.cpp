@@ -192,7 +192,7 @@ static void stream_toggle_pause(VideoState *is)
 {
     if (is->paused) {
         if(is->vtrack){
-            is->frame_timer += av_gettime_relative() / 1000000.0 - is->vtrack->clockUpdateTime();
+            is->frame_timer += gettime() - is->vtrack->clockUpdateTime();
         }
     }
 
@@ -269,15 +269,15 @@ static double video_refresh(VideoState *is)
         }
 
         bool flush = lastvp.serial() != vp.serial();
+        const double time = gettime();
         if (flush)
-            is->frame_timer = av_gettime_relative() / 1000000.0;
+            is->frame_timer = time;
 
         if (is->paused && !flush) break;
 
         const auto last_duration = vp_duration(is, lastvp, vp);
         const auto delay = compute_target_delay(last_duration, is);
 
-        const double time= av_gettime_relative()/1000000.0;
         if (time < is->frame_timer + delay) {
             remaining_time = std::min(is->frame_timer + delay - time, REFRESH_RATE);
             break;
