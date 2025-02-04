@@ -11,16 +11,7 @@
 #include <cstdarg>
 
 extern "C"{
-#include "libavutil/avstring.h"
-#include "libavutil/channel_layout.h"
-#include "libavutil/mem.h"
-#include "libavutil/pixdesc.h"
-#include "libavutil/dict.h"
-#include "libavutil/time.h"
 #include "libavformat/avformat.h"
-#include "libavcodec/avcodec.h"
-#include "libswscale/swscale.h"
-#include "libavutil/display.h"
 }
 
 #include <SDL3/SDL.h>
@@ -56,11 +47,10 @@ struct VideoState {
     bool seek_req = false;
 
     std::thread read_thr;
-    const AVInputFormat *iformat = nullptr;
     bool abort_request = false;
-    bool force_refresh = false;
     bool paused = false;
     bool queue_attachments_req = false;
+    bool flush_playback = false;
     int audio_stream = -1, video_stream = -1, subtitle_stream = -1;
     int last_video_stream = -1, last_audio_stream = -1, last_subtitle_stream = -1;
 
@@ -81,11 +71,9 @@ struct VideoState {
     std::condition_variable continue_read_thread;
 };
 
-static void video_image_display(VideoState *is)
+static void video_image_display(VideoState *is, const CAVFrame& vp)
 {
     CSubtitle *sp = NULL;
-
-    auto& vp = is->vtrack->getLastPicture();
 
     if (is->strack) {
         /*if (frame_queue_nb_remaining(&is->subpq) > 0) {
@@ -132,11 +120,8 @@ static void video_image_display(VideoState *is)
         }*/
     }
 
-    if (!vp.isUploaded()) {
-        is->sdl_renderer->updateVideoTexture(AVFrameView(*vp.constAv()));
-        is->sdl_renderer->refreshDisplay();
-        vp.setUploaded(true);
-    }
+    is->sdl_renderer->updateVideoTexture(AVFrameView(*vp.constAv()));
+    is->sdl_renderer->refreshDisplay();
 }
 
 static void request_ao_change(VideoState* ctx, int new_freq, int new_chn){
@@ -177,7 +162,7 @@ static void stream_component_close(VideoState *is, int stream_index, FormatConte
 static void stream_close(VideoState *is)
 {
     /* XXX: use a special url_shutdown call to abort parse cleanly */
-    is->abort_request = 1;
+    is->abort_request = true;
     if(is->read_thr.joinable())
         is->read_thr.join();
 
@@ -205,7 +190,6 @@ static double get_master_clock(VideoState *is)
 /* pause or resume the video */
 static void stream_toggle_pause(VideoState *is)
 {
-    std::scoped_lock lck(is->render_mutex);
     if (is->paused) {
         if(is->vtrack){
             is->frame_timer += av_gettime_relative() / 1000000.0 - is->vtrack->clockUpdateTime();
@@ -231,30 +215,28 @@ static void step_to_next_frame(VideoState *is)
     /* if the stream is paused unpause it, then step */
     if (is->paused)
         stream_toggle_pause(is);
-    is->step = 1;
+    is->step = true;
 }
 
 static double compute_target_delay(double delay, VideoState *is)
 {
-    double sync_threshold, diff = 0;
-
     /* update delay to follow master synchronisation source */
     if (is->atrack) {
         /* if video is slave, we try to correct big delays by
            duplicating or deleting a frame */
-        diff = is->vtrack->getClockVal() - is->atrack->getClockVal();
+        const auto diff = is->vtrack->getClockVal() - is->atrack->getClockVal();
 
         /* skip or repeat frame. We take into account the
            delay to compute the threshold. I still don't know
            if it is the best guess */
-        sync_threshold = FFMAX(AV_SYNC_THRESHOLD_MIN, FFMIN(AV_SYNC_THRESHOLD_MAX, delay));
+        const auto sync_threshold = std::max(AV_SYNC_THRESHOLD_MIN, std::min(AV_SYNC_THRESHOLD_MAX, delay));
         if (!isnan(diff) && fabs(diff) < is->max_frame_duration) {
             if (diff <= -sync_threshold)
-                delay = FFMAX(0, delay + diff);
+                delay = std::max(0.0, delay + diff);
             else if (diff >= sync_threshold && delay > AV_SYNC_FRAMEDUP_THRESHOLD)
                 delay = delay + diff;
             else if (diff >= sync_threshold)
-                delay = 2 * delay;
+                delay *= 2;
         }
     }
 
@@ -273,60 +255,53 @@ static double vp_duration(VideoState *is, const CAVFrame& vp, const CAVFrame& ne
     }
 }
 
-/* called to display each frame */
-static void video_refresh(VideoState *is, double *remaining_time)
+static double video_refresh(VideoState *is)
 {
-    double time;
-
+    double remaining_time = REFRESH_RATE;
     CSubtitle *sp = nullptr, *sp2 = nullptr;
+    while(is->vtrack->framesAvailable() > 0){
+        const auto& lastvp = is->vtrack->getLastPicture();
+        const auto& vp = is->vtrack->peekCurrentPicture();
 
-    if (is->vtrack) {
-    retry:
-        if (is->vtrack->framesAvailable() > 0) {
-            /* dequeue the picture */
-            const auto& lastvp = is->vtrack->getLastPicture();
-            const auto& vp = is->vtrack->peekCurrentPicture();
+        if (vp.serial() != is->vtrack->serial()) {
+            is->vtrack->nextFrame();
+            continue;
+        }
 
-            if (vp.serial() != is->vtrack->serial()) {
+        bool flush = lastvp.serial() != vp.serial();
+        if (flush)
+            is->frame_timer = av_gettime_relative() / 1000000.0;
+
+        if (is->paused && !flush) break;
+
+        const auto last_duration = vp_duration(is, lastvp, vp);
+        const auto delay = compute_target_delay(last_duration, is);
+
+        const double time= av_gettime_relative()/1000000.0;
+        if (time < is->frame_timer + delay) {
+            remaining_time = std::min(is->frame_timer + delay - time, REFRESH_RATE);
+            break;
+        }
+
+        is->frame_timer += delay;
+        if (delay > 0 && time - is->frame_timer > AV_SYNC_THRESHOLD_MAX)
+            is->frame_timer = time;
+
+        if (!isnan(vp.ts()))
+            is->vtrack->updateClock(vp.ts());
+
+        if (is->vtrack->framesAvailable() > 1 && is->atrack && !is->step) {
+            const auto& nextvp = is->vtrack->peekNextPicture();
+            const auto duration = vp_duration(is, vp, nextvp);
+            if(time > is->frame_timer + duration){
+                is->frame_drops_late++;
                 is->vtrack->nextFrame();
-                goto retry;
+                continue;
             }
+        }
 
-            if (lastvp.serial() != vp.serial())
-                is->frame_timer = av_gettime_relative() / 1000000.0;
-
-            if (is->paused)
-                goto display;
-
-            /* compute nominal last_duration */
-            const auto last_duration = vp_duration(is, lastvp, vp);
-            const auto delay = compute_target_delay(last_duration, is);
-
-            time= av_gettime_relative()/1000000.0;
-            if (time < is->frame_timer + delay) {
-                *remaining_time = FFMIN(is->frame_timer + delay - time, *remaining_time);
-                goto display;
-            }
-
-            is->frame_timer += delay;
-            if (delay > 0 && time - is->frame_timer > AV_SYNC_THRESHOLD_MAX)
-                is->frame_timer = time;
-
-            if (!isnan(vp.ts()))
-                is->vtrack->updateClock(vp.ts());
-
-            if (is->vtrack->framesAvailable() > 1) {
-                const auto& nextvp = is->vtrack->peekNextPicture();
-                const auto duration = vp_duration(is, vp, nextvp);
-                if(!is->step && (is->atrack) && time > is->frame_timer + duration){
-                    is->frame_drops_late++;
-                    is->vtrack->nextFrame();
-                    goto retry;
-                }
-            }
-
-            if (is->strack) {
-                /*while (frame_queue_nb_remaining(&is->subpq) > 0) {
+        if (is->strack) {
+            /*while (frame_queue_nb_remaining(&is->subpq) > 0) {
                     sp = frame_queue_peek(&is->subpq);
 
                     if (frame_queue_nb_remaining(&is->subpq) > 1)
@@ -357,27 +332,21 @@ static void video_refresh(VideoState *is, double *remaining_time)
                         break;
                     }
                 }*/
-            }
-
-            is->vtrack->nextFrame();
-            is->force_refresh = 1;
-
-            if (is->step && !is->paused)
-                stream_toggle_pause(is);
         }
-    display:
-        /* display picture */
-        if (is->force_refresh && is->vtrack->canDisplay())
-            video_image_display(is);
-    }
-    is->force_refresh = 0;
+
+        is->vtrack->nextFrame();
+        if (is->vtrack->canDisplay())
+            video_image_display(is, is->vtrack->getLastPicture());
+    } while(false);
+
+    return remaining_time;
 }
 
 /* open a given stream. Return 0 if OK */
 static int stream_component_open(VideoState *is, int stream_index, FormatContext& ic)
 {
     if (stream_index < 0 || stream_index >= ic.streamCount())
-        return -1;
+        return AVERROR(EINVAL);
 
     const CAVStream st = ic.streamAt(stream_index);
     const auto& codecpar = st.codecPar();
@@ -476,6 +445,7 @@ static void read_thread(VideoState *is)
         stream_component_open(is, fmt_ctx.audioStIdx(), fmt_ctx);
         stream_component_open(is, fmt_ctx.videoStIdx(), fmt_ctx);
         stream_component_open(is, fmt_ctx.subStIdx(), fmt_ctx);
+        is->streams_updated = true;
     }
 
     bool cont = true;
@@ -512,13 +482,44 @@ static void read_thread(VideoState *is)
                     pos = is->vtrack->lastPos();
                 const auto last_pts = get_master_clock(is);
 
-                if(fmt_ctx.seek(info, last_pts, pos)){
-                    if(is->vtrack)
-                        is->vtrack->flush();
-                    if(is->atrack)
-                        is->atrack->flush();
-                    if(is->strack)
-                        is->strack->flush();
+                if(info.type == SeekInfo::SEEK_STREAM_SWITCH){
+                    const auto idx = info.stream_idx;
+                    if(idx >= 0 && idx < fmt_ctx.streamCount()) {
+                        const auto type = fmt_ctx.streamAt(idx).type();
+                        switch(type){
+                        case AVMEDIA_TYPE_VIDEO:
+                            if(fmt_ctx.videoStIdx() != idx){
+                                stream_component_close(is, is->video_stream, fmt_ctx);
+                                stream_component_open(is, idx, fmt_ctx);
+                            }
+                            break;
+                        case AVMEDIA_TYPE_AUDIO:
+                            if(fmt_ctx.videoStIdx() != idx){
+                                stream_component_close(is, is->audio_stream, fmt_ctx);
+                                stream_component_open(is, idx, fmt_ctx);
+                            }
+                            break;
+                        case AVMEDIA_TYPE_SUBTITLE:
+                            if(fmt_ctx.subStIdx() != idx){
+                                stream_component_close(is, is->subtitle_stream, fmt_ctx);
+                                stream_component_open(is, idx, fmt_ctx);
+                            }
+                            break;
+                        default:
+                            //This shouldn't be happening
+                            break;
+                        }
+                    }
+                } else{
+                    if(fmt_ctx.seek(info, last_pts, pos)){
+                        if(is->vtrack)
+                            is->vtrack->flush();
+                        if(is->atrack)
+                            is->atrack->flush();
+                        if(is->strack)
+                            is->strack->flush();
+                        is->step = true;
+                    }
                 }
             }
         }
@@ -649,7 +650,7 @@ static double refresh_audio(VideoState* ctx){
 static double refresh_video(VideoState* ctx){
     double remaining_time = REFRESH_RATE;
     if (ctx->vtrack)
-        video_refresh(ctx, &remaining_time);
+        remaining_time = video_refresh(ctx);
     return remaining_time;
 }
 
@@ -668,9 +669,15 @@ static void check_playback_errors(VideoState* ctx){
 }
 
 static double playback_loop(VideoState* ctx){
+    bool do_step = ctx->step && ctx->paused;
+    if(do_step)
+        stream_toggle_pause(ctx);
     const auto audio_remaining_time = refresh_audio(ctx);
     const auto video_remaining_time = refresh_video(ctx);
     check_playback_errors(ctx);
+    if (do_step)
+        stream_toggle_pause(ctx);
+    ctx->step = false;
 
     return std::min(audio_remaining_time, video_remaining_time);
 }
@@ -682,7 +689,7 @@ void PlayerCore::openURL(QUrl url){
 
     if((player_ctx = stream_open(url.toString().toStdString().c_str(), video_renderer))){
         refreshPlayback(); //To start the refresh timer
-        setControlsActive(true);
+        emit setControlsActive(true);
     }
 }
 
@@ -690,7 +697,7 @@ void PlayerCore::stopPlayback(){
     if(player_ctx){
         stream_close(player_ctx);
         player_ctx = nullptr;
-        setControlsActive(false);
+        emit setControlsActive(false);
     }
 }
 

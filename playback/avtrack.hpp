@@ -10,6 +10,7 @@ protected:
     Decoder dec;
     PacketQueue pkts;
     CAVStream rel_st;
+    bool eof = false, demux_eof = false;
 
     /*For dynamic error reporting on the decoder thread*/
     std::atomic_bool has_error = false;
