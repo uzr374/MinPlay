@@ -177,8 +177,7 @@ static void toggle_mute(PlayerContext& ctx)
 
 static void step_to_next_frame(PlayerContext& ctx)
 {
-    /* if the stream is paused unpause it, then step */
-    if (ctx.paused)
+    if (!ctx.paused)
         stream_toggle_pause(ctx);
     ctx.step = true;
 }
