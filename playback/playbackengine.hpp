@@ -18,7 +18,7 @@ private:
     VideoDisplayWidget* video_dw = nullptr;
     LoggerWidget* loggerW = nullptr;
     SDLRenderer* video_renderer = nullptr;
-    struct VideoState* player_ctx = nullptr;
+    struct PlayerContext* player_ctx = nullptr;
     float audio_vol = 1.0f;
     double stream_duration = 0.0, cur_pos = 0.0;
     QTimer refresh_timer;
