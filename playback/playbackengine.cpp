@@ -50,7 +50,6 @@ struct PlayerContext {
     bool abort_request = false;
     bool queue_attachments_req = false;
     bool flush_playback = false;
-    int audio_stream = -1, video_stream = -1, subtitle_stream = -1;
     std::string url;
     std::mutex read_thr_wait_mutex;
     std::condition_variable continue_read_thread;
@@ -121,16 +120,13 @@ static void stream_component_close(PlayerContext& ctx, int stream_index, FormatC
     switch (st.codecPar().codec_type) {
     case AVMEDIA_TYPE_AUDIO:
         ctx.atrack = nullptr;
-        ctx.audio_stream = -1;
         ao_close(ctx);
         break;
     case AVMEDIA_TYPE_VIDEO:
         ctx.vtrack = nullptr;
-        ctx.video_stream = -1;
         break;
     case AVMEDIA_TYPE_SUBTITLE:
         ctx.strack = nullptr;
-        ctx.subtitle_stream = -1;
         break;
     default:
         break;
@@ -296,17 +292,14 @@ static int stream_component_open(PlayerContext& ctx, int stream_index, FormatCon
     switch (codecpar.codec_type) {
     case AVMEDIA_TYPE_AUDIO:
         ctx.atrack = std::make_unique<AudioTrack>(st, ctx.continue_read_thread);
-        ctx.audio_stream = stream_index;
         request_ao_change(ctx, codecpar.sample_rate, codecpar.ch_layout.nb_channels);
         break;
     case AVMEDIA_TYPE_VIDEO:
         ctx.vtrack = std::make_unique<VideoTrack>(st, ctx.continue_read_thread, ctx.sdl_renderer.supportedFormats());
-        ctx.video_stream = stream_index;
         ctx.queue_attachments_req = true;
         break;
     case AVMEDIA_TYPE_SUBTITLE:
         ctx.strack = std::make_unique<SubTrack>(st, ctx.continue_read_thread);
-        ctx.subtitle_stream = stream_index;
         break;
     default:
         break;
@@ -419,19 +412,19 @@ void read_thread(PlayerContext& ctx)
                         switch(type){
                         case AVMEDIA_TYPE_VIDEO:
                             if(fmt_ctx.videoStIdx() != idx){
-                                stream_component_close(ctx, ctx.video_stream, fmt_ctx);
+                                stream_component_close(ctx, fmt_ctx.videoStIdx(), fmt_ctx);
                                 stream_component_open(ctx, idx, fmt_ctx);
                             }
                             break;
                         case AVMEDIA_TYPE_AUDIO:
                             if(fmt_ctx.videoStIdx() != idx){
-                                stream_component_close(ctx, ctx.audio_stream, fmt_ctx);
+                                stream_component_close(ctx, fmt_ctx.audioStIdx(), fmt_ctx);
                                 stream_component_open(ctx, idx, fmt_ctx);
                             }
                             break;
                         case AVMEDIA_TYPE_SUBTITLE:
                             if(fmt_ctx.subStIdx() != idx){
-                                stream_component_close(ctx, ctx.subtitle_stream, fmt_ctx);
+                                stream_component_close(ctx, fmt_ctx.subStIdx(), fmt_ctx);
                                 stream_component_open(ctx, idx, fmt_ctx);
                             }
                             break;
@@ -458,7 +451,7 @@ void read_thread(PlayerContext& ctx)
             if (ctx.vtrack && ctx.vtrack->isAttachedPic()) {
                 CAVPacket pkt = fmt_ctx.attachedPic();
                 ctx.vtrack->putPacket(std::move(pkt));
-                ctx.vtrack->putFinalPacket(ctx.video_stream);
+                ctx.vtrack->putFinalPacket(fmt_ctx.videoStIdx());
             }
             ctx.queue_attachments_req = false;
         }
@@ -472,11 +465,11 @@ void read_thread(PlayerContext& ctx)
             if (ret < 0) {
                 if (ret == AVERROR_EOF) {
                     if (ctx.vtrack)
-                        ctx.vtrack->putFinalPacket(ctx.video_stream);
+                        ctx.vtrack->putFinalPacket(fmt_ctx.videoStIdx());
                     if (ctx.atrack)
-                        ctx.atrack->putFinalPacket(ctx.audio_stream);
+                        ctx.atrack->putFinalPacket(fmt_ctx.audioStIdx());
                     if (ctx.strack)
-                        ctx.strack->putFinalPacket(ctx.subtitle_stream);
+                        ctx.strack->putFinalPacket(fmt_ctx.subStIdx());
                 } else if (ret == AVERROR_EXIT) {
                     break;
                 }
@@ -486,12 +479,12 @@ void read_thread(PlayerContext& ctx)
                 }
             } else{
                 const auto pkt_st_index = pkt.streamIndex();
-                if (ctx.atrack && pkt_st_index == ctx.audio_stream) {
+                if (ctx.atrack && pkt_st_index == fmt_ctx.audioStIdx()) {
                     ctx.atrack->putPacket(std::move(pkt));
-                } else if (ctx.vtrack && pkt_st_index == ctx.video_stream
+                } else if (ctx.vtrack && pkt_st_index == fmt_ctx.videoStIdx()
                            && !ctx.vtrack->isAttachedPic()) {
                     ctx.vtrack->putPacket(std::move(pkt));
-                } else if (ctx.strack && pkt_st_index == ctx.subtitle_stream) {
+                } else if (ctx.strack && pkt_st_index == fmt_ctx.subStIdx()) {
                     ctx.strack->putPacket(std::move(pkt));
                 }
                 subsequent_err_count = 0;
@@ -499,9 +492,10 @@ void read_thread(PlayerContext& ctx)
         }
     }
 
-    stream_component_close(ctx, ctx.audio_stream, fmt_ctx);
-    stream_component_close(ctx, ctx.video_stream, fmt_ctx);
-    stream_component_close(ctx, ctx.subtitle_stream, fmt_ctx);
+    std::scoped_lock lck(ctx.render_mutex);
+    stream_component_close(ctx, fmt_ctx.audioStIdx(), fmt_ctx);
+    stream_component_close(ctx, fmt_ctx.videoStIdx(), fmt_ctx);
+    stream_component_close(ctx, fmt_ctx.subStIdx(), fmt_ctx);
 }
 
 static double refresh_audio(PlayerContext& ctx){
