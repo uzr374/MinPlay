@@ -40,7 +40,7 @@ QVector<QMenu*> MenuBarMenu::getTopLevelMenus() const {
 }
 
 void MenuBarMenu::getURLs() {
-    const auto urls = QFileDialog::getOpenFileNames(dynamic_cast<QWidget*>(this->parent()), "Choose files to open");
+    const auto urls = QFileDialog::getOpenFileNames(qobject_cast<QWidget*>(this->parent()), "Choose files to open");
     if(!urls.isEmpty()){
         emit submitURLs(urls);
     }
@@ -79,5 +79,5 @@ void MenuBarMenu::updateStreams(std::vector<CAVStream> streams){
 }
 
 void MenuBarMenu::streamSwitchRequested(QAction* triggered){
-
+    emit streamSwitch(triggered->data().toInt());
 }

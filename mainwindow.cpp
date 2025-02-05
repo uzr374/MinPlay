@@ -65,8 +65,6 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     connect(m_menus, &MenuBarMenu::stopPlayback, core, &PlayerCore::stopPlayback);
-    connect(m_menus, &MenuBarMenu::pausePlayback, core, &PlayerCore::pausePlayback);
-    connect(m_menus, &MenuBarMenu::resumePlayback, core, &PlayerCore::resumePlayback);
     connect(tBar, &ToolBar::sigSeek, core, &PlayerCore::requestSeekPercent);
     connect(core, &PlayerCore::updatePlaybackPos, tBar, &ToolBar::updatePlaybackPos);
     connect(core, &PlayerCore::updatePlaybackPos, sBar, &StatusBar::updatePlaybackPos);
@@ -75,6 +73,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_menus, &MenuBarMenu::submitURLs, plList, &Playlist::appendURLs);
     connect(plList, &Playlist::openURL, core, &PlayerCore::openURL);
     connect(core, &PlayerCore::sigUpdateStreams, m_menus, &MenuBarMenu::updateStreams);
+    connect(m_menus, &MenuBarMenu::streamSwitch, core, &PlayerCore::streamSwitch);
 }
 
 MainWindow::~MainWindow() {

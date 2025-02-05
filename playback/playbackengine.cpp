@@ -598,13 +598,6 @@ void PlayerCore::stopPlayback(){
     }
 }
 
-void PlayerCore::pausePlayback(){
-
-}
-
-void PlayerCore::resumePlayback(){
-
-}
 void PlayerCore::togglePause(){
     if(player_ctx){
         std::scoped_lock lck(player_ctx->render_mutex);
@@ -673,5 +666,13 @@ void PlayerCore::updateGUI(){
     const auto pos = get_master_clock(*player_ctx);
     if(!std::isnan(pos)){
         emit updatePlaybackPos(pos, player_ctx->stream_duration);
+    }
+}
+
+void PlayerCore::streamSwitch(int idx){
+    if(player_ctx){
+        std::scoped_lock lck(player_ctx->seek_mutex);
+        player_ctx->seek_info = SeekInfo{.type = SeekInfo::SEEK_STREAM_SWITCH, .stream_idx = idx};
+        player_ctx->seek_req = true;
     }
 }

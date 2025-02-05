@@ -28,7 +28,7 @@ signals:
     void pausePlayback();
     void resumePlayback();
     void submitURLs(const QStringList& urls);
-    void sigSwitchStream(int idx);
+    void streamSwitch(int idx);
 
 public slots:
     void updateStreams(std::vector<CAVStream> streams);

@@ -41,12 +41,11 @@ public:
    public slots:
         void openURL(QUrl url);
         void stopPlayback();
-        void pausePlayback();
-        void resumePlayback();
         void togglePause();
         void requestSeekPercent(double percent);
         void requestSeekIncr(double incr);
         void refreshPlayback();
+        void streamSwitch(int idx);
 };
 
 #endif // PLAYBACKENGINE_H
