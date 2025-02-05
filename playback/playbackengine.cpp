@@ -51,7 +51,6 @@ struct PlayerContext {
     bool queue_attachments_req = false;
     bool flush_playback = false;
     int audio_stream = -1, video_stream = -1, subtitle_stream = -1;
-    int last_video_stream = -1, last_audio_stream = -1, last_subtitle_stream = -1;
     std::string url;
     std::mutex read_thr_wait_mutex;
     std::condition_variable continue_read_thread;
@@ -296,19 +295,16 @@ static int stream_component_open(PlayerContext& ctx, int stream_index, FormatCon
 
     switch (codecpar.codec_type) {
     case AVMEDIA_TYPE_AUDIO:
-        ctx.last_audio_stream    = stream_index;
         ctx.atrack = std::make_unique<AudioTrack>(st, ctx.continue_read_thread);
         ctx.audio_stream = stream_index;
         request_ao_change(ctx, codecpar.sample_rate, codecpar.ch_layout.nb_channels);
         break;
     case AVMEDIA_TYPE_VIDEO:
-        ctx.last_video_stream    = stream_index;
         ctx.vtrack = std::make_unique<VideoTrack>(st, ctx.continue_read_thread, ctx.sdl_renderer.supportedFormats());
         ctx.video_stream = stream_index;
         ctx.queue_attachments_req = true;
         break;
     case AVMEDIA_TYPE_SUBTITLE:
-        ctx.last_subtitle_stream = stream_index;
         ctx.strack = std::make_unique<SubTrack>(st, ctx.continue_read_thread);
         ctx.subtitle_stream = stream_index;
         break;
@@ -488,7 +484,6 @@ void read_thread(PlayerContext& ctx)
                 if(subsequent_err_count > 1000){
                     break;
                 }
-
             } else{
                 const auto pkt_st_index = pkt.streamIndex();
                 if (ctx.atrack && pkt_st_index == ctx.audio_stream) {
