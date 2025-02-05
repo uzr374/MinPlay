@@ -590,7 +590,7 @@ void PlayerCore::openURL(QUrl url){
         stopPlayback();
     }
 
-    if((player_ctx = new PlayerContext(url.toString().toStdString(), std::ref(*video_renderer), std::ref(*this)))){
+    if((player_ctx = std::make_unique<PlayerContext>(url.toString().toStdString(), std::ref(*video_renderer), std::ref(*this)))){
         refreshPlayback(); //To start the refresh timer
         emit setControlsActive(true);
     }
@@ -598,7 +598,6 @@ void PlayerCore::openURL(QUrl url){
 
 void PlayerCore::stopPlayback(){
     if(player_ctx){
-        delete player_ctx;
         player_ctx = nullptr;
         emit setControlsActive(false);
     }
