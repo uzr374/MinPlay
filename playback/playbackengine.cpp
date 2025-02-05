@@ -41,17 +41,15 @@ struct PlayerContext {
     double stream_duration = 0.0;
     bool streams_updated = false;
     std::vector<CAVStream> streams;
-
-    std::mutex seek_mutex;
     SeekInfo seek_info;
     bool seek_req = false;
 
     std::thread read_thr;
-    bool abort_request = false;
+    std::atomic_bool abort_request = false;
     bool queue_attachments_req = false;
     bool flush_playback = false;
     std::string url;
-    std::mutex read_thr_wait_mutex;
+    std::mutex demux_mutex;
     std::condition_variable continue_read_thread;
 
     std::unique_ptr<AudioTrack> atrack;
@@ -313,8 +311,7 @@ static int stream_component_open(PlayerContext& ctx, int stream_index, FormatCon
 static int decode_interrupt_cb(void *opaque)
 {
     const auto ctx = (PlayerContext*)opaque;
-    std::scoped_lock lck(ctx->read_thr_wait_mutex);
-    return ctx->abort_request;
+    return ctx->abort_request.load();
 }
 
 static bool demux_buffer_is_full(PlayerContext& ctx){
@@ -368,31 +365,9 @@ void read_thread(PlayerContext& ctx)
         return;
     }
 
-    while (true) {
+    while (!ctx.abort_request.load()) {
         {
-            std::unique_lock lck(ctx.read_thr_wait_mutex);
-            if (ctx.abort_request)
-                break;
-            if (wait_timeout){
-                ctx.continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
-                wait_timeout = false;
-            }
-        }
-
-        if (ctx.paused != last_paused) {
-            last_paused = ctx.paused;
-            fmt_ctx.setPaused(last_paused);
-        }
-
-        if (last_paused && fmt_ctx.isRTSPorMMSH()) {
-            /* wait 10 ms to avoid trying to get another packet */
-            /* XXX: horrible */
-            wait_timeout = true;
-            continue;
-        }
-
-        {
-            std::scoped_lock seek_lock(ctx.seek_mutex);
+            std::unique_lock lck(ctx.demux_mutex);
             if (ctx.seek_req) {
                 ctx.seek_req = false;
                 const auto info = ctx.seek_info;
@@ -434,7 +409,7 @@ void read_thread(PlayerContext& ctx)
                         }
                     }
                 } else{
-                    if(fmt_ctx.seek(info, last_pts, pos)){
+                    if (fmt_ctx.seek(info, last_pts, pos)){
                         if(ctx.vtrack)
                             ctx.vtrack->flush();
                         if(ctx.atrack)
@@ -445,6 +420,23 @@ void read_thread(PlayerContext& ctx)
                     }
                 }
             }
+
+            if (wait_timeout){
+                ctx.continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
+                wait_timeout = false;
+            }
+        }
+
+        if (ctx.paused != last_paused) {
+            last_paused = ctx.paused;
+            fmt_ctx.setPaused(last_paused);
+        }
+
+        if (last_paused && fmt_ctx.isRTSPorMMSH()) {
+            /* wait 10 ms to avoid trying to get another packet */
+            /* XXX: horrible */
+            wait_timeout = true;
+            continue;
         }
 
         if (ctx.queue_attachments_req) {
@@ -459,7 +451,7 @@ void read_thread(PlayerContext& ctx)
         /* if the queue are full or eof was reached, no need to read more */
         if ((!realtime && demux_buffer_is_full(ctx)) || fmt_ctx.eofReached()) {
             wait_timeout = true;
-        } else{
+        } else {
             CAVPacket pkt;
             const int ret = fmt_ctx.read(pkt);
             if (ret < 0) {
@@ -601,7 +593,7 @@ void PlayerCore::togglePause(){
 
 void PlayerCore::requestSeekPercent(double percent){
     if(player_ctx){
-        std::scoped_lock slck(player_ctx->seek_mutex);
+        std::scoped_lock slck(player_ctx->demux_mutex);
         player_ctx->seek_info = {.type = SeekInfo::SEEK_PERCENT, .percent = percent};
         player_ctx->seek_req = true;
     }
@@ -609,7 +601,7 @@ void PlayerCore::requestSeekPercent(double percent){
 
 void PlayerCore::requestSeekIncr(double incr){
     if(player_ctx){
-        std::scoped_lock slck(player_ctx->seek_mutex);
+        std::scoped_lock slck(player_ctx->demux_mutex);
         player_ctx->seek_info = {.type = SeekInfo::SEEK_INCREMENT, .increment = incr};
         player_ctx->seek_req = true;
     }
@@ -665,7 +657,7 @@ void PlayerCore::updateGUI(){
 
 void PlayerCore::streamSwitch(int idx){
     if(player_ctx){
-        std::scoped_lock lck(player_ctx->seek_mutex);
+        std::scoped_lock lck(player_ctx->demux_mutex);
         player_ctx->seek_info = SeekInfo{.type = SeekInfo::SEEK_STREAM_SWITCH, .stream_idx = idx};
         player_ctx->seek_req = true;
     }
