@@ -53,6 +53,7 @@ struct PlayerContext {
     int audio_stream = -1, video_stream = -1, subtitle_stream = -1;
     int last_video_stream = -1, last_audio_stream = -1, last_subtitle_stream = -1;
     std::string url;
+    std::mutex read_thr_wait_mutex;
     std::condition_variable continue_read_thread;
 
     std::unique_ptr<AudioTrack> atrack;
@@ -324,6 +325,7 @@ static int stream_component_open(PlayerContext& ctx, int stream_index, FormatCon
 static int decode_interrupt_cb(void *opaque)
 {
     const auto ctx = (PlayerContext*)opaque;
+    std::scoped_lock lck(ctx->read_thr_wait_mutex);
     return ctx->abort_request;
 }
 
@@ -348,8 +350,7 @@ static bool demux_buffer_is_full(PlayerContext& ctx){
 /* this thread gets the stream from the disk or the network */
 void read_thread(PlayerContext& ctx)
 {
-    std::mutex wait_mutex;
-    bool last_paused = false;
+    bool last_paused = false, wait_timeout = false;
     std::optional<FormatContext> ic;
     int subsequent_err_count = 0;
 
@@ -375,12 +376,21 @@ void read_thread(PlayerContext& ctx)
         ctx.streams_updated = true;
     }
 
-    bool cont = true;
     if (!ctx.atrack && !ctx.vtrack) {
-        cont = false;
+        return;
     }
 
-    while (cont && !ctx.abort_request) {
+    while (true) {
+        {
+            std::unique_lock lck(ctx.read_thr_wait_mutex);
+            if (ctx.abort_request)
+                break;
+            if (wait_timeout){
+                ctx.continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
+                wait_timeout = false;
+            }
+        }
+
         if (ctx.paused != last_paused) {
             last_paused = ctx.paused;
             fmt_ctx.setPaused(last_paused);
@@ -389,7 +399,7 @@ void read_thread(PlayerContext& ctx)
         if (last_paused && fmt_ctx.isRTSPorMMSH()) {
             /* wait 10 ms to avoid trying to get another packet */
             /* XXX: horrible */
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            wait_timeout = true;
             continue;
         }
 
@@ -458,17 +468,9 @@ void read_thread(PlayerContext& ctx)
             ctx.queue_attachments_req = false;
         }
 
-        /* if the queue are full, no need to read more */
-        if (!realtime && demux_buffer_is_full(ctx)) {
-            /* wait 10 ms */
-            std::unique_lock lck(wait_mutex);
-            ctx.continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
-            continue;
-        }
-
-        if(fmt_ctx.eofReached()){
-            std::unique_lock lck(wait_mutex);
-            ctx.continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
+        /* if the queue are full or eof was reached, no need to read more */
+        if ((!realtime && demux_buffer_is_full(ctx)) || fmt_ctx.eofReached()) {
+            wait_timeout = true;
         } else{
             CAVPacket pkt;
             const int ret = fmt_ctx.read(pkt);
@@ -487,8 +489,7 @@ void read_thread(PlayerContext& ctx)
                 if(subsequent_err_count > 1000){
                     break;
                 }
-                std::unique_lock lck(wait_mutex);
-                ctx.continue_read_thread.wait_for(lck, std::chrono::milliseconds(10));
+
             } else{
                 const auto pkt_st_index = pkt.streamIndex();
                 if (ctx.atrack && pkt_st_index == ctx.audio_stream) {
@@ -497,7 +498,7 @@ void read_thread(PlayerContext& ctx)
                            && !ctx.vtrack->isAttachedPic()) {
                     ctx.vtrack->putPacket(std::move(pkt));
                 } else if (ctx.strack && pkt_st_index == ctx.subtitle_stream) {
-                   ctx.strack->putPacket(std::move(pkt));
+                    ctx.strack->putPacket(std::move(pkt));
                 }
                 subsequent_err_count = 0;
             }
