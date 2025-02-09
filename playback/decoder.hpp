@@ -20,6 +20,8 @@ struct Decoder
     Q_DISABLE_COPY_MOVE(Decoder);
     static const std::array<AVColorSpace, 3> sdl_supported_color_spaces;
 
+    enum class DecRes{ERROR = -2, ABORT, TRY_AGAIN, SUCCESS};
+
     CAVPacket pkt;
     PacketQueue& queue;
     AVCodecContext *avctx = nullptr;
@@ -34,6 +36,7 @@ struct Decoder
 
     Decoder(const CAVStream& st, PacketQueue &queue, std::condition_variable &empty_queue_cond);
     int decode_frame(AVFrame *frame, AVSubtitle *sub);
+
     void destroy();
 
     template<class T>
