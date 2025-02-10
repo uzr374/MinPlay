@@ -3,10 +3,14 @@
 #include <QUrl>
 #include <QFileInfo>
 #include <QSettings>
+#include <QHBoxLayout>
 
 Playlist::Playlist(QWidget *parent)
     : QWidget{parent}, list(new QListWidget(this))
 {
+    auto lout = new QHBoxLayout(this);
+    lout->addWidget(list);
+
     connect(list, &QListWidget::itemDoubleClicked, this, &Playlist::itemOpened);
 
     restore();
