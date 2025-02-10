@@ -36,6 +36,7 @@ struct PlayerContext {
     SDLRenderer& sdl_renderer;
     AudioOutput aout;
     AudioResampler acvt;
+    PlayerCore& core;
 
     std::mutex render_mutex; /*guards each iteration of the refresh loop*/
     double stream_duration = 0.0;
@@ -66,8 +67,8 @@ struct PlayerContext {
     bool step = false;
 
     PlayerContext() = delete;
-    PlayerContext(std::string _url, SDLRenderer& renderer, PlayerCore& core) :
-        url(_url), sdl_renderer(renderer){
+    PlayerContext(std::string _url, SDLRenderer& renderer, PlayerCore& c) :
+        url(_url), sdl_renderer(renderer), core(c){
         read_thr = std::thread(read_thread, std::ref(*this));
     }
 
@@ -364,6 +365,7 @@ void read_thread(PlayerContext& ctx)
     if (!ctx.atrack && !ctx.vtrack) {
         return;
     }
+    ctx.core.updateTitle(fmt_ctx.title());
 
     while (!ctx.abort_request.load()) {
         {
@@ -581,6 +583,7 @@ void PlayerCore::stopPlayback(){
     if(player_ctx){
         player_ctx = nullptr;
         emit setControlsActive(false);
+        emit resetGUI();
     }
 }
 
@@ -661,4 +664,8 @@ void PlayerCore::streamSwitch(int idx){
         player_ctx->seek_info = SeekInfo{.type = SeekInfo::SEEK_STREAM_SWITCH, .stream_idx = idx};
         player_ctx->seek_req = true;
     }
+}
+
+void PlayerCore::updateTitle(std::string title){
+    emit setPlayerTitle(QString::fromStdString(title));
 }

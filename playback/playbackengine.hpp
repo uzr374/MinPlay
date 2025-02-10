@@ -33,10 +33,14 @@ signals:
     void sigUpdateStreams(std::vector<CAVStream> streams);
     void updatePlaybackPos(double pos, double dur);
     void setControlsActive(bool active);
+    void resetGUI();
+    void setPlayerTitle(QString title);
 
 public:
    PlayerCore(QObject* parent, VideoDisplayWidget* video_dw, LoggerWidget* logW);
    void log(const char* fmt, ...);
+
+   void updateTitle(std::string title);
 
    public slots:
         void openURL(QUrl url);

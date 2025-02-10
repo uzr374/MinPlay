@@ -1,6 +1,7 @@
 #include "formatcontext.hpp"
 
 #include <stdexcept>
+#include <QUrl>
 
 static bool is_realtime(AVFormatContext *s)
 {
@@ -15,17 +16,17 @@ static bool is_realtime(AVFormatContext *s)
     return false;
 }
 
-FormatContext::FormatContext(QString url, decltype(AVFormatContext::interrupt_callback.callback) int_cb, void* cb_opaque) : ic(avformat_alloc_context()) {
+FormatContext::FormatContext(std::string url, decltype(AVFormatContext::interrupt_callback.callback) int_cb, void* cb_opaque) : ic(avformat_alloc_context()) {
     ic->interrupt_callback.callback = int_cb;
     ic->interrupt_callback.opaque = cb_opaque;
     ic->flags |= AVFMT_FLAG_GENPTS | AVFMT_FLAG_DISCARD_CORRUPT;
     ic->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
     AVDictionary* format_opts = nullptr;
     av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
-    auto err = avformat_open_input(&ic, url.toStdString().c_str(), nullptr, &format_opts);
+    auto err = avformat_open_input(&ic, url.c_str(), nullptr, &format_opts);
     av_dict_free(&format_opts);
     if (err < 0) {
-        throw std::runtime_error(std::string("Failed to open url: ") + url.toStdString());
+        throw std::runtime_error(std::string("Failed to open url: ") + url);
     }
     dynamic_streams = (ic->ctx_flags & AVFMTCTX_NOHEADER);
     seekable = (ic->ctx_flags & AVFMTCTX_UNSEEKABLE);
@@ -54,10 +55,13 @@ FormatContext::FormatContext(QString url, decltype(AVFormatContext::interrupt_ca
     sub_idx = av_find_best_stream(ic, AVMEDIA_TYPE_SUBTITLE, -1, (audio_idx >= 0 ? audio_idx : video_idx), NULL, 0);
 
     AVDictionaryEntry* t = nullptr;
-    if ((t = av_dict_get(ic->metadata, "title", NULL, 0)))
-        title = QString::asprintf("%s - %s", t->value, ic->url);
-    else
-        title = ic->url;
+    if ((t = av_dict_get(ic->metadata, "title", nullptr, 0))){
+        stream_title = QString::asprintf("%s - %s", t->value, ic->url).toStdString();
+    }
+    else{
+        QUrl url = isRealtime() ? QString(ic->url) : QUrl::fromLocalFile(ic->url);
+        stream_title = url.isLocalFile() ? url.fileName().toStdString() : ic->url;
+    }
 }
 
 FormatContext::~FormatContext(){
@@ -291,3 +295,4 @@ CAVPacket FormatContext::attachedPic() const{
     }
     return pkt;
 }
+std::string FormatContext::title() const{return stream_title;}

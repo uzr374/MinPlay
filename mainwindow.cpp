@@ -74,6 +74,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(plList, &Playlist::openURL, core, &PlayerCore::openURL);
     connect(core, &PlayerCore::sigUpdateStreams, m_menus, &MenuBarMenu::updateStreams);
     connect(m_menus, &MenuBarMenu::streamSwitch, core, &PlayerCore::streamSwitch);
+    connect(core, &PlayerCore::setPlayerTitle, this, &MainWindow::setTitle);
 }
 
 MainWindow::~MainWindow() {
@@ -93,4 +94,8 @@ QRect MainWindow::getDefaultWindowGeometry(QScreen* container){
 void MainWindow::closeEvent(QCloseEvent* evt){
     core->stopPlayback();
     QMainWindow::closeEvent(evt);
+}
+
+void MainWindow::setTitle(QString title){
+    setWindowTitle(title);
 }

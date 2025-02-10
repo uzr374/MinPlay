@@ -3,7 +3,6 @@
 
 #include <QtGlobal>
 #include <vector>
-#include <QString>
 
 #include "cavstream.hpp"
 #include "cavpacket.hpp"
@@ -36,11 +35,11 @@ private:
     double max_frame_duration = 0.0, duration_s = 0.0;
     int video_idx = -1, video_last_idx = -1, audio_idx = -1, audio_last_idx = -1, sub_idx = -1, sub_last_idx = -1;
     int64_t last_seek_pos = 0, last_seek_rel = 0;
-    QString title;
+    std::string stream_title;
 
 public:
     FormatContext() = default;
-    FormatContext(QString url, decltype(AVFormatContext::interrupt_callback.callback) int_cb, void* cb_opaque);
+    FormatContext(std::string url, decltype(AVFormatContext::interrupt_callback.callback) int_cb, void* cb_opaque);
     ~FormatContext();
 
     bool isRealtime() const;
@@ -64,6 +63,7 @@ public:
     int64_t bitrate() const;
     int64_t startTime() const;
     CAVPacket attachedPic() const;
+    std::string title() const;
 };
 
 #endif // FORMATCONTEXT_HPP

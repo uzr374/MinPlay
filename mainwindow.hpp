@@ -21,6 +21,9 @@ private:
 private:
     QRect getDefaultWindowGeometry(QScreen* container);
 
+private slots:
+    void setTitle(QString new_title);
+
 public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
