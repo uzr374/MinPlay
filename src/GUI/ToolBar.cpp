@@ -9,7 +9,16 @@ ToolBar::ToolBar(QWidget* parent) : QToolBar(parent){
 
     playback_slider->setEnabled(false);
 
+    addAction("Stop");
+    addSeparator();
+    addAction("Pause");
+    addAction("Step");
+    addSeparator();
+    addAction("<<");
+    addAction(">>");
+    addSeparator();
     addWidget(playback_slider);
+    addSeparator();
     addWidget(vol_slider);
 
     connect(playback_slider, &Slider::valueChanged, this, [&](int val){
